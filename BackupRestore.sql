@@ -1,16 +1,16 @@
 use	master
 go
-if	object_id ( 'dbo.DoBackupRestore' , 'p' )	is	null
-	exec	( 'create	proc	dbo.DoBackupRestore	as	select	ObjectNotCreated=	1/0' )
+if	object_id ( 'dbo.BackupRestore' , 'p' )	is	null
+	exec	( 'create	proc	dbo.BackupRestore	as	select	ObjectNotCreated=	1/0' )
 go
-alter	proc	dbo.DoBackupRestore	-- бекап и восстановление баз данных
+alter	proc	dbo.BackupRestore	-- бекап и восстановление баз данных
 	@sAction		varchar ( 32 )
 					-- команда BACKUP DATABASE/BACKUP LOG/restore
 	,@sDBList		varchar ( 8000 )	output
 					-- список через ";" баз данных(включая linked сервер перед именем базы через ".") до 100 значений (=MAXRECURSION default)
 					-- output=список необработанных баз как индикатор ошибки
 	,@sBackupDir		varchar ( 260 )
-					-- каталог для файлов *.bak,*.trn доступный по тему же пути на сервере, где расположена каждая база данных; туда кладутся и оттуда берутся файлы бекапаов; для restore не должен содержать файлов, залоченных/недописанных или не предназначенных для восстановления
+					-- каталог для файлов *.bak,*.trn доступный по тому же пути на сервере, где расположена каждая база данных; туда кладутся и оттуда берутся файлы бекапаов; для restore не должен содержать файлов, залоченных/недописанных или не предназначенных для восстановления
 	,@bIsCoupled		bit
 					-- (backup/restore)backup=именовать базы групповым признаком;restore=базы обрабатывать вместе, если одной не хватает, то не выполняться; разницей в начале снятия бекапа пренебрегаем
 	,@sSQLDir		varchar ( 256 )
@@ -59,8 +59,14 @@ declare	@iError			int
 	,@sBackupInfo		varchar ( 128 )
 	,@sBackupInfoStr	varchar ( 128 )
 	,@sDBListIn		varchar ( 8000 )
+	,@sServer		sysname
+	,@sServerQuoted		nvarchar ( 256 )
+	,@bServerNotExist	bit
+	,@sExecAtServer		nvarchar ( 256 )
 
 	,@sProjectSign		varchar ( 32 )
+	,@sPostixUnique		nvarchar ( 256 )
+	,@sProcName		sysname
 
 	,@iDBCount		int		-- число баз в backup, восстанавливаемых синхронно
 	,@dtMoment		datetime
@@ -70,6 +76,8 @@ select	@bDebug=		1
 	,@sExtTrn=		'trn'
 	,@sProjectSign=		'363B1BEF8FA34873824C29D1EBC10C79'
 	,@sDBLogShippedSign=	'z'+	@sProjectSign					-- считаем, что база под log shipping имеет уникальный префикс в имени
+	,@sPostixUnique=	replace ( replace ( replace ( replace ( convert ( varchar ( 24 ) , getdate() , 121 ) , '-' , '' ) , ' ' , '' ) , ':' , '' ) , '.' , '' )
+	,@sProcName=		'##'+	@sDBLogShippedSign+	'_PlanBR_'+	@sPostixUnique
 ----------
 if	@sBackupDir	not	like	'%\'	set	@sBackupDir=	@sBackupDir+	'\'
 if	@sSQLDir	not	like	'%\'	set	@sSQLDir=	@sSQLDir+	'\'
@@ -216,7 +224,9 @@ set	@sPatternFull=		'%[_]backup[_]'+	right ( @sPattern , len ( @sPattern )-	1 )	
 ----------
 create	table	#DBs
 (	Sequence	smallint
-	,Server		varchar ( 128 )		-- linked server
+	,ServerQuoted	varchar ( 256 )		-- linked server
+	,Server		varchar ( 128 )
+	,ValueQuoted	varchar ( 256 )
 	,Value		varchar ( 128 ) )
 ----------
 set	@sDBListIn=	@sDBList+	';'	-- для упрощения проверки последнего значения в списке
@@ -235,10 +245,12 @@ set	@sDBListIn=	@sDBList+	';'	-- для упрощения проверки последнего значения в сп
 	where
 		cte.Pos<=	len ( @sDBListIn ) )
 insert
-	#DBs ( Sequence,	Server,	Value )
+	#DBs ( Sequence,	ServerQuoted,	Server,	ValueQuoted,	Value )
 select
 	Sequence=	ROW_NUMBER()	over	( order	by	min ( Sequence ) )
-	,parsename ( Value , 2 )	-- функцию используем только для упрощения обработки разделителя
+	,quotename ( parsename ( Value , 2 ) )	-- функцию используем только для упрощения обработки разделителя
+	,parsename ( Value , 2 )
+	,quotename ( parsename ( Value , 1 ) )
 	,parsename ( Value , 1 )
 from
 	cte
@@ -631,37 +643,70 @@ else
 					+	isnull ( '|'+	app_name() , '' ) )
 			,@sBackupInfoStr=	replace ( @sBackupInfo , '''' , '''''' )	-- чтобы при склеивании команды символ сохранился
 ----------
-		set	@sScript=	'set	@sDBListOut=	''''
-'
+		select	@sScript=	'create	proc	'+	@sProcName+	'
+	@sDBListOut	varchar ( 8000 )	output
+as
+set	@sDBListOut=	'''''
+			,@dtMoment=	getdate()
+			,@sCutoff=	str ( year ( @dtMoment ) , 4 )
+				+	'_'
+				+	replace ( str ( month ( @dtMoment ) , 2 ) , ' ' , '0' )
+				+	'_'
+				+	replace ( str ( day ( @dtMoment ) , 2 ) , ' ' , '0' )
+				+	'_'
+				+	replace ( replace ( right ( convert ( varchar ( 23 ) , @dtMoment , 121 ) , 12 ) , ':' , '' ) , '.' , '_' )
+				--+	'0000'
 ----------
-		if	@bIsCoupled=	1
-			select	@dtMoment=	getdate()
-				,@sCutoff=	str ( year ( @dtMoment ) , 4 )
-					+	'_'
-					+	replace ( str ( month ( @dtMoment ) , 2 ) , ' ' , '0' )
-					+	'_'
-					+	replace ( str ( day ( @dtMoment ) , 2 ) , ' ' , '0' )
-					+	'_'
-					+	replace ( replace ( right ( convert ( varchar ( 23 ) , @dtMoment , 121 ) , 12 ) , ':' , '' ) , '.' , '_' )
-					--+	'0000'
+		set	@c=	cursor	local	fast_forward	for
+					select
+						t.Server
+						,t.ServerQuoted
+						,IsNotExist=	case
+									when		t.Server	is	not	null
+										and	ss.srvname	is		null	then	0
+									else								1
+								end
+					from
+						#DBs	t
+						left	join	sysservers	ss	on
+							ss.srvname=	t.Server
+						--and	ss.isremote=	0
+					group	by
+						t.Server
+						,t.ServerQuoted
+					order	by
+						min ( t.Sequence )
 ----------
-		select
-			@sScript=	@sScript+	'
-
-if	exists	( select						-- считаем, что нельзя одновременно бекапить несколько раз, хотя сервер и сам останавливается и ждёт завершения бекапа в другом соединении
-			1
-		From
-			master.sys.dm_exec_requests			-- sql 2005+
-		where
-				command	like	''BACKUP%''
-			and	DB_NAME ( database_id )=	'''+	Value+	''' )
-	set	@sDBListOut=	isnull ( @sDBListOut , '''' )+	'''+	Value+	';''
-else
+		open	@c
+----------
+		while	1=	1
+		begin
+			fetch	next	from	@c	into	@sServer,	@sServerQuoted,	@bServerNotExist
+			if	@@fetch_status<>	0	break
+----------
+			if	@bServerNotExist=	1
+			begin
+				set	@sDBListOut=	isnull ( @sDBListOut , '' )+	ValueQuoted+	';'
+				continue
+			end
+----------
+			select
+				@sScriptTemp=	'
+----------
+select							-- считаем, что нельзя одновременно бекапить несколько раз, хотя сервер и сам останавливается и ждёт завершения бекапа в другом соединении
+	@sDBListOut=	isnull ( @sDBListOut , '''' )+	DB_NAME ( database_id )+	'';''
+from
+	master.sys.dm_exec_requests			-- sql 2005+
+where
+		command	like	''BACKUP%''
+	and	DB_NAME ( database_id )=	'''+	Value+	'''
+if	@@Rowcount=	0
+begin
 	BACKUP	'+	case
 				when	@sAction	like	'%database'	then	'database'
 				else							'log'
 			end+	'
-		'+	Value+	'
+		'+	ValueQuoted+	'
 	TO
 		DISK=	'''+		@sBackupDir+	Value+	@sBackupSign+	@sCutoff+	case	@bIsCoupled
 													when	1	then	'0000'
@@ -681,32 +726,51 @@ else
 		,INIT
 		,NAME=	'''+	@sBackupInfoStr+	'''
 		,SKIP
-		,STATS=	100'
-		from
-			#DBs
-		order	by
-			Sequence
+		,STATS=	100
+	if	@@Error<>	0
+		set	@sDBListOut=	isnull ( @sDBListOut , '''' )+	'''+	Value+	';''
+end'
+				,@sExecAtServer=case
+							when		@sServer=	@@ServerName
+								or	@sServer	is	null	then	''
+							else							@sServerQuoted+	'...'
+						end+	'sp_executesql'
+				,@sScript=	@sScript+	''+	case
+										when		@sServer=	@@ServerName
+											or	@sServer	is	null	then	@sScriptTemp
+										else							'
 ----------
-		if	@bDebug=	1
-		begin
-			print	substring(@sScript,1,8000)
-			print	substring(@sScript,8000,16000)
-			print	substring(@sScript,16000,24000)
-			print	substring(@sScript,24000,32000)
-			print	substring(@sScript,32000,40000)
-			print	substring(@sScript,40000,48000)
-			print	substring(@sScript,48000,56000)
-			print	substring(@sScript,56000,64000)
-			print	substring(@sScript,64000,72000)
-			print	substring(@sScript,72000,80000)
+set	@sScript=	'+	@sScriptTemp+	'
+exec	'+	@sExecAtServer+	'
+		@statement=	@sScript
+		,@params=	N''@sDBListOut	varchar ( 8000 )	out''
+		,@s=		@sDBList	out'
+
+									end
+			from
+				#DBs
+			where
+					Server=	@sServer
+				or	isnull ( Server , @sServer )	is	null
+			order	by
+				Sequence
+----------
+			if	@bDebug=	1
+			begin
+				print	substring(@sScript,1,8000)
+				print	substring(@sScript,8000,16000)
+				print	substring(@sScript,16000,24000)
+				print	substring(@sScript,24000,32000)
+				print	substring(@sScript,32000,40000)
+				print	substring(@sScript,40000,48000)
+				print	substring(@sScript,48000,56000)
+				print	substring(@sScript,56000,64000)
+				print	substring(@sScript,64000,72000)
+				print	substring(@sScript,72000,80000)
+			end
 		end
 ----------
-/*
-		exec	sp_executesql
-				@statement=	@sScript
-				,@params=	N'@sDBListOut	varchar ( 8000 )	out'
-				,@s=		@sDBList	out
-*/
+		deallocate	@c
 	end
 ----------
 goto	done
