@@ -1,21 +1,11 @@
-/*
-sp_configure 'show advanced options', 1
-GO
-RECONFIGURE
-GO
-sp_configure 'Ole Automation Procedures', 1
-GO
-RECONFIGURE
-GO
-*/
+--(c) LGPL
+
 use	master
-if	schema_id ( 'sETL' )	is	null
-	exec	( 'create	schema	sETL' )
 go
-if	object_id ( 'sETL.DoBackupRestore' , 'p' )	is	null
-	exec	( 'create	proc	sETL.DoBackupRestore	as	select	ObjectNotCreated=	1/0' )
+if	object_id ( 'dbo.BackupRestore' , 'p' )	is	null
+	exec	( 'create	proc	dbo.BackupRestore	as	select	ObjectNotCreated=	1/0' )
 go
-alter	proc	sETL.DoBackupRestore	-- бекап и восстановление баз данных
+alter	proc	dbo.BackupRestore	-- бекап и восстановление баз данных
 	@tPlan		text			-- maintenance план в XML
 	,@tMessage	text=	null	output	-- список сообщений в XML, например, ошибок о то, что БД есть в плане, но она не обработалась
 
@@ -1431,11 +1421,3 @@ set	@sDBList=	@sDBListOut
 
 --drop	table
 --	#BackupDir
-go
-/*
-exec	sETL.DoBackupRestore
-	@iDBCount=		1
-	,@sBackupDir=		'C:\___backup!!!\'
-	,@sSQLDir=		'C:\SQL\MSSQL11.GENERAL\MSSQL\DATA\'
-	,@sOwner=		'dbo'
-*/
