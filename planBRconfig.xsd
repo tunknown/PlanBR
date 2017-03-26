@@ -1,0 +1,211 @@
+<?xml version="1.0" encoding="windows-1251"?>
+<xs:schema attributeFormDefault="unqualified" elementFormDefault="qualified" xmlns:xs="http://www.w3.org/2001/XMLSchema">
+	<xs:element name="PlanBR">
+		<xs:complexType>
+			<xs:sequence>
+				<xs:element minOccurs="1" maxOccurs="unbounded" name="s"><!--suit, can be used for grouping by similar action, attributes values by default for bodies-->
+					<xs:complexType>
+						<xs:sequence>
+							<xs:element minOccurs="1" maxOccurs="unbounded" name="b"><!--body for suit, suit parameters can be overridden-->
+								<xs:complexType>
+									<xs:attribute name="Action" use="optional" ><!--backup/restore: Action with database/file, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:pattern value="backup database|backup log|restore"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="FromServer" use="optional" ><!--backup/restore: linked SQL server source, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="128"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="FromDB" use="optional" ><!--backup/restore: database source, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="128"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="FromFolder" use="optional" ><!--restore: filesystem folder source, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="3"/>
+												<xs:maxLength value="260"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="FromFile" use="optional" ><!--restore: backup file source, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="260"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="ToServer" use="optional" ><!--restore: linked SQL server destination, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="128"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="ToDB" use="optional" ><!--restore: database destination, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="128"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="ToFolder" use="optional" ><!--backup: filesystem folder destination, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="3"/>
+												<xs:maxLength value="260"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="ToFolderFinal" type="xs:string" use="optional" fixed=""/><!--not supported-->
+									<xs:attribute name="ToFile" use="optional" ><!--backup: backup file destination, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:minLength value="1"/>
+												<xs:maxLength value="260"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="IsCompressed" use="optional" ><!--backup: is backup file compressed by SQL server? override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:unsignedByte">
+												<xs:minInclusive value="0"/>
+												<xs:maxInclusive value="1"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="IsCopyOnly" use="optional" ><!--backup: preserve normal sequence of backups, override for suit value-->
+										<xs:simpleType>
+											<xs:restriction base="xs:unsignedByte">
+												<xs:minInclusive value="0"/>
+												<xs:maxInclusive value="1"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="Access" use="optional" ><!--restore: creates temporary writable copy of readonly logshipped database-->
+										<xs:simpleType>
+											<xs:restriction base="xs:string">
+												<xs:pattern value="read|write"/>
+											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+								</xs:complexType>
+							</xs:element>
+						</xs:sequence>
+						<xs:attribute name="Suit" use="optional" ><!--not supported-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="0"/><!--automatic suit name-->
+									<xs:maxLength value="128"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="IsAsyncronous" type="xs:unsignedByte" use="optional" fixed="0"/><!--not supported-->
+						<xs:attribute name="Action" use="optional" ><!--backup/restore: Action with database/file, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:pattern value="backup database|backup log|restore"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="FromServer" use="optional" ><!--backup/restore: linked SQL server source, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="128"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="FromDB" use="optional" ><!--backup/restore: database source, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="128"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="FromFolder" use="optional" ><!--restore: filesystem folder source, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="3"/>
+									<xs:maxLength value="260"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="FromFile" use="optional" ><!--restore: backup file source, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="260"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="ToServer" use="optional" ><!--restore: linked SQL server destination, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="128"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="ToDB" use="optional" ><!--restore: database destination, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="128"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="ToFolder" use="optional" ><!--backup: filesystem folder destination, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="3"/>
+									<xs:maxLength value="260"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="ToFolderFinal" type="xs:string" use="optional" fixed=""/><!--not supported-->
+						<xs:attribute name="ToFile" use="optional" ><!--backup: backup file destination, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:string">
+									<xs:minLength value="1"/>
+									<xs:maxLength value="260"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="IsCompressed" use="optional" ><!--backup: is backup file compressed by SQL server? used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:unsignedByte">
+									<xs:minInclusive value="0"/>
+									<xs:maxInclusive value="1"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="IsCopyOnly" use="optional" ><!--backup: preserve normal sequence of backups, used if not set in body-->
+							<xs:simpleType>
+								<xs:restriction base="xs:unsignedByte">
+									<xs:minInclusive value="0"/>
+									<xs:maxInclusive value="1"/>
+								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+					</xs:complexType>
+				</xs:element>
+			</xs:sequence>
+		</xs:complexType>
+	</xs:element>
+</xs:schema>
