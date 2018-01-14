@@ -1,4 +1,4 @@
-use	Updater
+use	tempdb
 go
 if	object_id ( 'dbo.Entriggerate' , 'p' )	is	null
 	exec	( 'create	proc	dbo.Entriggerate	as	return' )
@@ -8,7 +8,8 @@ alter	proc	dbo.Entriggerate
 as
 set	nocount	on
 ----------
-declare	@sObjectAlias	nvarchar ( 512 )
+declare	@bDebug		bit=	1
+	,@sObjectAlias	nvarchar ( 512 )
 	,@sSign		varchar ( 32 )
 	,@sExec		nvarchar ( max )
 	,@sExec1	nvarchar ( max )
@@ -29,6 +30,9 @@ from
 where
 		ObjectAlias	like	@sTableName
 	and	ObjectType=	'u'
+order	by
+	ObjectId			-- попытка сохранить недокументированную sumstr
+	,ColumnId
 ----------
 declare	c	cursor	local	fast_forward	for
 	select
@@ -104,6 +108,8 @@ declare	@x	xml
 		,@iFirst=	@iFirst+	1
 	from
 		#ShowColumnDataTypes
+	where
+		ObjectId=	@iObjectId
 	order	by
 		ColumnId
 ----------
@@ -121,7 +127,8 @@ declare	@x	xml
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1
 	order	by
 		ColumnId
 ----------
@@ -141,17 +148,17 @@ declare	@x	xml
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1
 	order	by
 		ColumnId
 ----------
-	set	@sExec=		@sExec
+	select	@sExec=		@sExec
 			+	@sExec1
 			+	'
 	union	all
 	select'
-----------
-	select	@iFirst=	1
+		,@iFirst=	1
 		,@sExec1=	''
 		,@sExec2=	''
 ----------
@@ -166,6 +173,8 @@ declare	@x	xml
 		,@iFirst=	@iFirst+	1
 	from
 		#ShowColumnDataTypes
+	where
+		ObjectId=	@iObjectId
 	order	by
 		ColumnId
 ----------
@@ -195,11 +204,12 @@ declare	@x	xml
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1
 	order	by
 		ColumnId
 ----------
-	select	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 	from
 		( select
 			*
@@ -221,8 +231,7 @@ select	@x=
 		,[d!1!xmlns:xsi]
 		,[d!1!host]
 		,[d!1!program]'
-----------
-	set	@sExec1=	''
+		,@sExec1=	''
 ----------
 	select
 		@sExec1=	@sExec1+	'
@@ -230,14 +239,14 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 		,[r!2!!hide]'
-----------
-	set	@sExec1=	''
+		,@sExec1=	''
 ----------
 	select														-- хак- одинаковое имя элемента и атрибута, используется только одно, другое игнорируется
 		@sExec1=	@sExec1
@@ -251,11 +260,12 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	0
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	0
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 	from
 		( select	distinct
 			Tag=			1
@@ -263,8 +273,7 @@ select	@x=
 			,[d!1!xmlns:xsi]=	''http://www.w3.org/2001/XMLSchema-instance''	-- хак необходим из-за невозможности применения elementsxsinil, для поддержки xsi:nil
 			,[d!1!host]=		host_name()
 			,[d!1!program]=		program_name()'
-----------
-	set	@sExec1=	''
+		,@sExec1=	''
 ----------
 	select
 		@sExec1=	@sExec1+	'
@@ -272,14 +281,14 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
-			,[r!2!!hide]'
-----------
-	set	@sExec1=	''
+	select	@sExec=		@sExec+	@sExec1+	'
+			,[r!2!!hide]=		convert ( smallint,		null )'		-- тип данных для 1024 полей
+		,@sExec1=	''
 ----------
 	select														-- хак- одинаковое имя элемента и атрибута, используется только одно, другое игнорируется
 		@sExec1=	@sExec1
@@ -293,16 +302,16 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	0
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	0
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 		from
 			cte
 		where'
-----------
-	set	@sExec1=	'
+		,@sExec1=	'
 				'+	@sSign+	'=	1'
 ----------
 	select
@@ -312,6 +321,8 @@ select	@x=
 				or	'+	quotename ( ColumnName )+	'	is		null	and	'+	quotename ( ColumnNameSigned )+	'	is	not	null )'
 	from
 		#ShowColumnDataTypes
+	where
+		ObjectId=	@iObjectId
 	order	by
 		ColumnId
 
@@ -343,7 +354,7 @@ select	@x=
 
 
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 		union	all
 		select
 			Tag=			2
@@ -351,8 +362,7 @@ select	@x=
 			,[d!1!xmlns:xsi]=	null
 			,[d!1!host]=		null
 			,[d!1!program]=		null'
-----------
-	set	@sExec1=	''
+		,@sExec1=	''
 ----------
 	select
 		@sExec1=	@sExec1+	'
@@ -360,14 +370,14 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
-			,[r!2!!hide]'
-----------
-	set	@sExec1=	''
+	select	@sExec=		@sExec+	@sExec1+	'
+			,[r!2!!hide]=		1'
+		,@sExec1=	''
 ----------
 	select														-- хак- одинаковое имя элемента и атрибута, используется только одно, другое игнорируется
 		@sExec1=	@sExec1
@@ -381,16 +391,16 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	0
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	0
 	order	by
 		ColumnId
 ----------
-	set	@sExec=	@sExec+	@sExec1+	'
+	select	@sExec=		@sExec+	@sExec1+	'
 		from
 			cte
 		where'
-----------
-	set	@sExec1=	'
+		,@sExec1=	'
 				'+	@sSign+	'=	1'
 ----------
 	select
@@ -401,6 +411,8 @@ select	@x=
 
 	from
 		#ShowColumnDataTypes
+	where
+		ObjectId=	@iObjectId
 	order	by
 		ColumnId
 ----------
@@ -419,15 +431,14 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1		-- ***здесь же обрабатывать и поля RowVersion
 	order	by
 		ColumnId
 ----------
-	select	@sExec=	@sExec+	'
-		group	by'+	@sExec2+	'
-'
-----------
-	select	@sExec1=	''
+	select	@sExec=		@sExec+	'
+		group	by'+	@sExec2
+		,@sExec1=	''
 		,@sExec2=	''
 ----------
 	select
@@ -437,13 +448,17 @@ select	@x=
 	from
 		#ShowColumnDataTypes
 	where
-		IsPrimaryKey=	1
+			ObjectId=	@iObjectId
+		and	IsPrimaryKey=	1
 	order	by
 		ColumnId
 ----------
+--***до и после обрабатываемого поля перечислить все предыдущие и последующие поля как=null
+
 	select
-		@sExec1=	@sExec1+	case	p.Sequence
-							when	c.Sequence	then	'		union	all
+		@sExec1=	@sExec1+	case
+							when	c.IsFirstLast=	1	then	'
+		union	all
 		select
 			Tag=			'+	convert ( varchar ( 4 ),	p.Sequence+	2 )+	'
 			,Parent=		2
@@ -452,23 +467,36 @@ select	@x=
 			,[d!1!program]=		null'
 					+	@sExec2
 					+	'
-			,[f0!2!!hide]=		'+	convert ( varchar ( 4 ),	p.Sequence+	2 )+	'
+			,[r!2!!hide]=		'+	convert ( varchar ( 4 ),	p.Sequence+	2 )
+							else					''
+						end
+					+	case
+							when		p.Sequence=	c.Sequence
+								and	c.IsPrimaryKey=	0	then	'
 			,['+	p.ColumnName+	'!'+	convert ( varchar ( 4 ),	p.Sequence+	2 )+	'!!element]=	case
 							when	'+	quotename ( p.ColumnName )+	'=	'+	quotename ( p.ColumnNameSigned )+	'	then	null
 							else								'+	quotename ( p.ColumnName )+	'
-						end
+						end'+	case	c.IsNullable
+								when	1	then	'
 			,['+	p.ColumnName+	'!'+	convert ( varchar ( 4 ),	p.Sequence+	2 )+	'!xsi:nil]=	case
 							when	'+	quotename ( p.ColumnName )+	'=	'+	quotename ( p.ColumnNameSigned )+	'	then	null
 							when	'+	quotename ( p.ColumnName )+	'	is	null	and	'+	quotename ( p.ColumnNameSigned )+	'	is	null	then	null
 							when	'+	quotename ( p.ColumnName )+	'	is	null				then	''true''
 							else								null
 						end'
-							else				'
-			,['+	c.ColumnName+	'!'+	convert ( varchar ( 4 ),	c.Sequence+	2 )+	'!!element]=	null
+								else			''
+							end
+							when		p.Sequence<>	c.Sequence
+								and	c.IsPrimaryKey=	0	then	'
+			,['+	c.ColumnName+	'!'+	convert ( varchar ( 4 ),	c.Sequence+	2 )+	'!!element]=	null'+	case	c.IsNullable
+																		when	1	then	'
 			,['+	c.ColumnName+	'!'+	convert ( varchar ( 4 ),	c.Sequence+	2 )+	'!xsi:nil]=	null'
+																		else			''
+																	end
+							else						''
 						end
-					+	case	c.IsLast
-							when	1	then	'
+					+	case	c.IsFirstLast
+							when	0	then	'
 		from
 			cte
 		where
@@ -480,11 +508,12 @@ select	@x=
 							else			''
 						end
 	from
-		#ShowColumnDataTypes	p
-		left	join	#ShowColumnDataTypes	c	on
-			p.Sequence<=	c.Sequence
+		#ShowColumnDataTypes	p				-- цикл по каждому полю
+		inner	join	#ShowColumnDataTypes	c	on
+			c.ObjectId=	p.ObjectId
 	where
-			p.IsPrimaryKey=	0
+			p.ObjectId=	@iObjectId
+		and	p.IsPrimaryKey=	0
 	order	by
 		p.ColumnId
 		,c.ColumnId
@@ -506,18 +535,30 @@ if	@x	is	not	null
 		,SYSTEM_USER
 		,@x'
 ----------
-	print	( substring ( @sExec,	1,	4000 ) )
-	print	( substring ( @sExec,	4001,	8000 ) )
-	print	( substring ( @sExec,	8001,	12000 ) )
-	print	( substring ( @sExec,	12001,	20000 ) )
-	print	( substring ( @sExec,	16001,	20000 ) )
-	print	( substring ( @sExec,	20001,	24000 ) )
-	print	( substring ( @sExec,	24001,	28000 ) )
-	print	( substring ( @sExec,	28001,	32000 ) )
-	print	( substring ( @sExec,	32001,	36000 ) )
-	print	( substring ( @sExec,	36001,	40000 ) )
-	print	( substring ( @sExec,	40001,	44000 ) )
+	if	@bDebug=	1
+	begin
+		print	( substring ( @sExec,	1,	4000 ) )
+		print	( substring ( @sExec,	4001,	8000 ) )
+		print	( substring ( @sExec,	8001,	12000 ) )
+		print	( substring ( @sExec,	12001,	20000 ) )
+		print	( substring ( @sExec,	16001,	20000 ) )
+		print	( substring ( @sExec,	20001,	24000 ) )
+		print	( substring ( @sExec,	24001,	28000 ) )
+		print	( substring ( @sExec,	28001,	32000 ) )
+		print	( substring ( @sExec,	32001,	36000 ) )
+		print	( substring ( @sExec,	36001,	40000 ) )
+		print	( substring ( @sExec,	40001,	44000 ) )
+	end
 --	exec	( @sExec )
 end
 deallocate	c
 go
+if	object_id ( 'dbo.Test',	'u' )	is	not	null
+	drop	table	dbo.Test
+create	table	dbo.Test
+(	f1	int		primary	key
+	,f2	varchar ( 256 )	null
+	,f3	datetime	null
+	,q	rowversion )
+exec	dbo.Entriggerate
+		@sTableName=	'dbo.Test'
