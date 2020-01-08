@@ -63,7 +63,7 @@
 											</xs:restriction>
 										</xs:simpleType>
 									</xs:attribute>
-									<xs:attribute name="ToFolder" use="optional" ><!--backup: filesystem folder destination, override for suit value-->
+									<xs:attribute name="ToFolder" use="optional" ><!--backup/restore: filesystem folder destination, override for suit value-->
 										<xs:simpleType>
 											<xs:restriction base="xs:string">
 												<xs:minLength value="3"/>
@@ -94,6 +94,11 @@
 												<xs:minInclusive value="0"/>
 												<xs:maxInclusive value="1"/>
 											</xs:restriction>
+										</xs:simpleType>
+									</xs:attribute>
+									<xs:attribute name="Moment" use="optional" ><!--restore: skip newest backups if present-->
+										<xs:simpleType>
+											<xs:restriction base="xs:dateTime"/>
 										</xs:simpleType>
 									</xs:attribute>
 									<xs:attribute name="Access" use="optional" ><!--restore: creates temporary writable copy of readonly logshipped database-->
@@ -170,7 +175,7 @@
 								</xs:restriction>
 							</xs:simpleType>
 						</xs:attribute>
-						<xs:attribute name="ToFolder" use="optional" ><!--backup: filesystem folder destination, used if not set in body-->
+						<xs:attribute name="ToFolder" use="optional" ><!--backup/restore: filesystem folder destination, used if not set in body-->
 							<xs:simpleType>
 								<xs:restriction base="xs:string">
 									<xs:minLength value="3"/>
@@ -201,6 +206,11 @@
 									<xs:minInclusive value="0"/>
 									<xs:maxInclusive value="1"/>
 								</xs:restriction>
+							</xs:simpleType>
+						</xs:attribute>
+						<xs:attribute name="Moment" use="optional" ><!--restore: skip newest backups if present-->
+							<xs:simpleType>
+								<xs:restriction base="xs:dateTime"/>
 							</xs:simpleType>
 						</xs:attribute>
 					</xs:complexType>

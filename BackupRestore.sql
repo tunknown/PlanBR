@@ -2,32 +2,37 @@ GO
 RECONFIGURE
 GO
 exec	sp_configure 'show advanced options',		1
-GO
 exec	sp_configure 'Ole Automation Procedures',	1
 GO
 RECONFIGURE
 GO
 use	master
 go
-if	object_id ( 'dbo.BackupRestore' , 'p' )	is	null
+if	object_id ( 'dbo.BackupRestore',	'p' )	is	null
 	exec	( 'create	proc	dbo.BackupRestore	as	select	ObjectNotCreated=	1/0' )
 go
-/*
-(c) 2017 TUnknown
-License:
-public domain as executing code, cc0 as citation
-*/
 alter	proc	dbo.BackupRestore	-- бекап и восстановление баз данных
-	@tPlan		text			-- maintenance план в XML
-	,@tMessage	text=	null	output	-- список сообщений в XML, например, ошибок о то, что БД есть в плане, но она не обработалась
+	@tPlan		text			-- план обработки бекапа в XML
+	,@tMessage	text=	null	output	-- список сообщений/ошибок в XML, например, что БД есть в плане, но она не обработалась
+--(c) 2017-2020 TUnknown License: public domain/cc0
 as
 -- учитывать возможные одинарные кавычки в именах файлов
 -- создать эту процедуру как временную на linked сервере и подать в неё xml параметры, относящиеся только к тому серверу
+
+
+
+
+/*363B1BEF8FA34873824C29D1EBC10C79_1*/		--при вызове на другом сервере через linked server здесь должно быть drop	proc	dbo.BackupRestore
+
+
+
+
+
 set	nocount	on
 declare	@iError			int
 	,@iRowCount		int
 	,@sMessage		varchar ( 256 )
-	,@bDebug		bit	-- 1=включить отладочные сообщения
+	,@bDebug		bit=1	-- 1=включить отладочные сообщения
 
 	,@iOLEConnection	int
 	,@sMessage1		VARCHAR ( 4000 )
@@ -36,18 +41,18 @@ declare	@iError			int
 	,@sPwd			varchar ( 128 )
 	,@iDumb			bigint
 
-	,@sBackupFile		varchar ( 256 )
+--	,@sBackupFile		varchar ( 256 )
 	,@sBackupDirFileQuoted	varchar ( 256 )
 
-	,@iBackupType		int
+--	,@iBackupType		int
 	,@sDBStandby		varchar ( 256 )
 	,@sDBLive		varchar ( 256 )
 	,@sCutoff		varchar ( 256 )
 
-	,@dFirstLSN		numeric ( 25 , 0 )
-	,@databaseBackupLSN	numeric ( 25 , 0 )
+--	,@dFirstLSN		numeric ( 25,	0 )
+--	,@databaseBackupLSN	numeric ( 25,	0 )
 
-	,@sScript		varchar ( max )			-- не совместимо с sql 2000
+	,@sScript		nvarchar ( max )			-- не совместимо с sql 2000
 	,@sScriptPart		nvarchar ( max )
 	,@sScriptTemp		nvarchar ( max )
 
@@ -56,8 +61,8 @@ declare	@iError			int
 	,@cBodySteps		cursor
 
 	,@bRestoring		bit
-	,@bStopWaiting		bit
-	,@bQuorum		bit
+--	,@bStopWaiting		bit
+--	,@bQuorum		bit
 	,@bAfterDBChange	bit
 	,@bBeforeDBChange	bit
 	,@bAfterServerChange	bit
@@ -77,18 +82,19 @@ declare	@iError			int
 	,@sLockName		nvarchar ( 255 )
 
 	,@sProjectSign		varchar ( 32 )
-	,@sPostfixUnique	varchar ( 256 )
 	,@sProcName		sysname
 
-	,@iDBCount		int		-- число баз в backup, восстанавливаемых синхронно
+--	,@iDBCount		int		-- число баз в backup, восстанавливаемых синхронно
 	,@dtMoment		datetime
+	,@dtNow			datetime
+	,@sNow			varchar ( 23 )
+	,@sNow1			varchar ( 23 )
 	,@sDBDelimeter		varchar ( 2 )
-
-	,@sFileNameBak		varchar ( 256 )
 
 	,@iXML			integer
 	,@iParent		smallint
 
+	,@sSQLDirDefault	nvarchar ( 260 )
 	,@sSQLDir		nvarchar ( 260 )	-- (		restore	)каталог с файлами(mdf/ndf/ldf) баз данных MSSQL
 	,@sDBList		varchar ( 8000 )
 	,@bIsCoupled		bit		-- ->Cutoff( backup	restore	)backup=именовать базы групповым признаком;restore=базы обрабатывать вместе, если одной не хватает, то не выполняться; разницей в начале снятия бекапа пренебрегаем
@@ -122,7 +128,17 @@ declare	@iError			int
 	,@dLSNFirst		numeric ( 25,	0 )
 	,@dLSNLast		numeric ( 25,	0 )
 
-	,@x			xml
+	,@sServerVersion	varchar ( 256 )
+	,@iServerVersion	tinyint
+
+	,@xPart			xml
+	,@sXML			varchar ( max )
+
+	,@sHKLM			varchar ( 32 )
+	,@sInstanceKey		nvarchar ( 1024 )
+	,@sKey			nvarchar ( 1024 )
+
+	,@sUnique		varchar ( 32 )
 ----------
 select	@bDebug=		1
 	,@sExtBak=		'bak'							-- должны быть совместимы с MainenancePlan
@@ -131,7 +147,18 @@ select	@bDebug=		1
 	,@sDBLogShippedSign=	'z'+	@sProjectSign					-- считаем, что база под log shipping имеет уникальный префикс в имени
 	,@sDBDelimeter=		';'
 	,@sDBListOut=		''
+
+	,@dtNow=		getdate()
+	,@sNow=			convert ( char ( 23 ),	@dtNow,	121 )
+	,@sNow1=		replace ( replace ( replace ( replace ( @sNow,	'-',	'' ),	' ',	'' ),	':',	'' ),	'.',	'' )
+
+	,@sBackupSign=		'_backup_'
+	,@sServerVersion=	convert ( varchar ( 256 ), serverproperty ( 'ProductVersion' ) )
+	,@iServerVersion=	isnull ( parsename ( @sServerVersion,	4 ),	parsename ( @sServerVersion,	3 ) )
 ----------
+
+--*** нужен ли параметр во входящем XML- директории для складывания разных файлов БД при отсутствии её на сервере, т.е. при автосоздании?
+
 create	table	#Suit	-- группа команд
 -- поля группы спускаются в содержимое группы; если в содержимом заданы поля, отличные от групповых, то ошибка
 (	Id		smallint	not null	unique	clustered	--backup/restore		автоматически присваивается в OPENXML, используется для сортировки
@@ -146,13 +173,14 @@ create	table	#Suit	-- группа команд
 	,FromFile	sysname		null		--restore		-- заменить имя базы и сервера в имени файла на пустой символ и этот остаток использовать как CutOff
 	,ToServer	sysname		null		--restore
 	,ToDB		sysname		null		--restore
-	,ToFolder	sysname		null		--backup
-	,ToFolderFinal	sysname		null		--backup/restore
+	,ToFolder	sysname		null		--backup/restore
+	,ToFolderFinal	sysname		null		--backup/restore		-- не поддерживается
 	,ToFile		sysname		null		--backup
 	,IsCompressed	bit		null		--backup
 	,IsCopyOnly	bit		null		--backup
+	,Moment		datetime	null		--restore
 	,ProcName	sysname		null		--backup/restore
-,check	( Action	in	( 'backup database' , 'backup log' , 'restore' ) )	)
+,check	( Action	in	( 'backup database',	'backup log',	'restore' ) )	)
 ----------
 create	table	#Body	-- содержимое группы
 (	Id		smallint	not null	unique	clustered	--backup/restore
@@ -165,11 +193,12 @@ create	table	#Body	-- содержимое группы
 	,FromFile	sysname		null		--restore		-- заменить имя базы и сервера в имени файла на пустой символ и этот остаток использовать как CutOff
 	,ToServer	sysname		null		--restore
 	,ToDB		sysname		null		--restore
-	,ToFolder	sysname		null		--backup
-	,ToFolderFinal	sysname		null		--backup/restore	-- перенос в этот фолдер после backup/restore, для того, чтобы там файлы были незаблокированы длительной операцией
+	,ToFolder	sysname		null		--backup/restore
+	,ToFolderFinal	sysname		null		--backup/restore	-- перенос в этот фолдер после backup/restore, для того, чтобы там файлы были незаблокированы длительной операцией	-- не поддерживается
 	,ToFile		sysname		null		--backup
 	,IsCompressed	bit		null		--backup
 	,IsCopyOnly	bit		null		--backup
+	,Moment		datetime	null		--restore
 	,LSNFirst	numeric ( 25,	0 )	null	--restore
 	,LSNLast	numeric ( 25,	0 )	null	--restore
 	,Access		varchar ( 256 )	null		--restore		null= не создавать копию базы, read=создавать копию, базу оставлять в readonly, write=создавать копию, для базы разрешать запись
@@ -204,30 +233,32 @@ create	table	#Body	-- содержимое группы
 	,FileNameShort	as	left (	case
 						when	Action	like	'backup%'	then	ToFile
 						else						FromFile
-					end , len (	case
+					end,	len (	case
 								when	Action	like	'backup%'	then	ToFile
 								else						FromFile
-							end ) - charindex ( '.' , reverse (	case
+							end )-	charindex ( '.',	reverse (	case
 													when	Action	like	'backup%'	then	ToFile
 													else						FromFile
 												end ) ) )
 	,Extension	as	right (	case
 						when	Action	like	'backup%'	then	ToFile
 						else						FromFile
-					end , charindex ( '.' , reverse (	case
+					end,	charindex ( '.',	reverse ( case
 											when	Action	like	'backup%'	then	ToFile
 											else						FromFile
 										end ) )-	1 )
 
 
-,unique	( Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFile,	IsCompressed,	IsCopyOnly )
-,check	( Action	in	( 'backup database' , 'backup log' , 'restore' ) )
-,check	( Access	in	( 'read' , 'write' ) )
---,check	( FromDB	is	not	null	or	ToDB		is	not	null )	--/ограничение не работает при автозаполнении параметров; если обрабатывать все доступные базы, то параметр не указывается
---,check	( FromFolder	is	not	null	or	ToFolder	is	not	null )	--\
- )
+,unique	( Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFile,	IsCompressed,	IsCopyOnly,	Moment )
+,check	( Action	in	( 'backup database',	'backup log',	'restore' ) )
+,check	( Access	in	( 'read',	'write' ) )
+/*
+,check	( FromDB	is	not	null	or	ToDB		is	not	null )	--/ограничение не работает при автозаполнении параметров; если обрабатывать все доступные базы, то параметр не указывается
+,check	( FromFolder	is	not	null	or	ToFolder	is	not	null )	--\
+*/
+)
 ----------
-if	isnull ( datalength ( @tPlan ) , 0 )<	4
+if	isnull ( datalength ( @tPlan ),	0 )<	4
 begin
 	select	@sMessage=	'План резервирования в неверном формате',
 		@iError=	-3
@@ -243,7 +274,7 @@ begin
 end
 ----------
 insert
-	#Suit	( Id,	Suit,	IsAsyncronous,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly )
+	#Suit	( Id,	Suit,	IsAsyncronous,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly,	Moment )
 SELECT
 	Id
 	,Suit
@@ -260,6 +291,7 @@ SELECT
 	,ToFile
 	,IsCompressed
 	,IsCopyOnly
+	,Moment
 FROM
 	OPENXML	( @iXML,	'/PlanBR/s',	1 )	-- атрибуты case sensitive
 WITH
@@ -277,11 +309,12 @@ WITH
 	,ToFolderFinal	sysname
 	,ToFile		sysname
 	,IsCompressed	bit
-	,IsCopyOnly	bit )
+	,IsCopyOnly	bit
+	,Moment		datetime )
 ----------
 -- нужна проверка ошибок всех check и unique?
 insert
-	#Body	( Id,	Parent,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly,	Access )
+	#Body	( Id,	Parent,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly,	Moment,	Access )
 select
 	Id
 	,Parent
@@ -297,6 +330,7 @@ select
 	,ToFile
 	,IsCompressed
 	,IsCopyOnly
+	,Moment
 	,Access
 from
 	OPENXML	( @iXML,	'/PlanBR/s/b',	1 )	-- атрибуты case sensitive
@@ -315,6 +349,7 @@ WITH
 	,ToFile		sysname
 	,IsCompressed	bit
 	,IsCopyOnly	bit
+	,Moment		datetime
 	,Access		varchar ( 256 ) )
 ----------
 EXEC	@iError=	sp_xml_removedocument	@iXML	-- sql2000+
@@ -328,7 +363,7 @@ end
 update
 	b
 set
-	@sMessage=	isnull ( @sMessage , '' )
+	@sMessage=	isnull ( @sMessage,	'' )
 		+	case
 				when	( b.Action<>	s.Action	or	isnull ( b.Action,	s.Action )	is	null )	and	@sMessage	not	like	'%,Action%'		then	',Action'
 				when	b.FromServer<>	s.FromServer									and	@sMessage	not	like	'%,FromServer%'		then	',FromServer'
@@ -342,6 +377,7 @@ set
 				when	b.ToFile<>	s.ToFile									and	@sMessage	not	like	'%,ToFile%'		then	',ToFile'
 				when	b.IsCompressed<>s.IsCompressed									and	@sMessage	not	like	'%,IsCompressed%'	then	',IsCompressed'
 				when	b.IsCopyOnly<>	s.IsCopyOnly									and	@sMessage	not	like	'%,IsCopyOnly%'		then	',IsCopyOnly'
+				when	b.Moment<>	s.Moment									and	@sMessage	not	like	'%,Moment%'		then	',Moment'
 				else																						''
 			end
 	,Action=	isnull ( b.Action,	s.Action )
@@ -371,13 +407,14 @@ set
 	,ToFile=	isnull ( b.ToFile,	s.ToFile )
 	,IsCompressed=	isnull ( b.IsCompressed,s.IsCompressed )
 	,IsCopyOnly=	isnull ( b.IsCopyOnly,	s.IsCopyOnly )
+	,Moment=	isnull ( b.Moment,	s.Moment )
 from
 	#Suit	s
 	,#Body	b
 where
 	b.Parent=	s.Id
 ----------
-set	@sMessage=	nullif ( stuff ( @sMessage , 1 , 1 , '' ) , '' )
+set	@sMessage=	nullif ( stuff ( @sMessage,	1,	1,	'' ),	'' )
 ----------
 if	@sMessage	is	not	null
 begin
@@ -417,12 +454,15 @@ create	table	#BackupDir
 	,IsFile			bit			null )
 ----------
 create	table	#Server_DBFiles
-(	dbid			smallint
-	,fileid			smallint
+(	dbid			integer
+	,fileid			integer
 	,DBName			sysname
 	,LogicalName		nvarchar ( 260 )
 	,filename		nvarchar ( 260 )
-	,TempName		varchar ( 32 ) )
+	,TempName		varchar ( 32 )
+
+	,Path		as	left ( filename,	len ( filename )-	charindex ( '\',	reverse ( filename ) )+	1 )
+	,File1		as	right ( filename,	charindex ( '\',	reverse ( filename ) )-	1 )	)
 ----------
 create	table	#Generation_Files
 (	DBStandby		varchar ( 256 )
@@ -432,10 +472,10 @@ create	table	#Generation_Files
 	,TempFileName		nvarchar ( 260 )
 	,IsDBStandbyCreate	bit
 
-	,StandbyPath	as	left ( StandbyFileName , len ( StandbyFileName )-	charindex ( '\' , reverse ( StandbyFileName ) )+	1 )
-	,StandbyFile	as	right ( StandbyFileName , charindex ( '\' , reverse ( StandbyFileName ) )-	1 )
-	,LivePath	as	left ( LiveFileName , len ( LiveFileName )-	charindex ( '\' , reverse ( LiveFileName ) )+	1 )
-	,LiveFile	as	right ( LiveFileName , charindex ( '\' , reverse ( LiveFileName ) )-	1 ) )
+	,StandbyPath	as	left ( StandbyFileName,	len ( StandbyFileName )-	charindex ( '\',	reverse ( StandbyFileName ) )+	1 )
+	,StandbyFile	as	right ( StandbyFileName,charindex ( '\',	reverse ( StandbyFileName ) )-	1 )
+	,LivePath	as	left ( LiveFileName,	len ( LiveFileName )-	charindex ( '\',	reverse ( LiveFileName ) )+	1 )
+	,LiveFile	as	right ( LiveFileName,	charindex ( '\',	reverse ( LiveFileName ) )-	1 ) )
 ----------
 ----------
 create	table	#File_LabelOnly
@@ -464,11 +504,11 @@ create	table	#File_BackupHeader	-- взято из процедуры master.dbo.sp_can_tlog_be_
 	,databaseName		nvarchar ( 128 )
 	,databaseVersion	int
 	,databaseCreationDate	datetime
-	,BackupSize		numeric ( 20 , 0 )	NULL
-	,FirstLsn		numeric ( 25 , 0 )	NULL
-	,LastLsn		numeric ( 25 , 0 )	NULL
-	,CheckpointLsn		numeric ( 25 , 0 )	NULL
-	,databaseBackupLsn	numeric ( 25 , 0 )	NULL
+	,BackupSize		numeric ( 20,	0 )	NULL
+	,FirstLsn		numeric ( 25,	0 )	NULL
+	,LastLsn		numeric ( 25,	0 )	NULL
+	,CheckpointLsn		numeric ( 25,	0 )	NULL
+	,databaseBackupLsn	numeric ( 25,	0 )	NULL
 	,BackupStartDate	datetime
 	,BackupFinishDate	datetime
 	,SortOrder		int
@@ -497,9 +537,9 @@ create	table	#File_BackupHeader	-- взято из процедуры master.dbo.sp_can_tlog_be_
 	,IsForceOffline		bit			null
 	,IsCopyOnly		bit			null
 	,FirstRecoveryForkID	uniqueidentifier	null
-	,ForkPointLSN		numeric ( 25 , 0 )	null
+	,ForkPointLSN		numeric ( 25,	0 )	null
 	,RecoveryModel		nvarchar ( 60 )		null
-	,DifferentialBaseLSN	numeric ( 25 , 0 )	null
+	,DifferentialBaseLSN	numeric ( 25,	0 )	null
 	,DifferentialBaseGUID	uniqueidentifier	null
 	,BackupTypeDescription	nvarchar ( 60 )		null
 	,BackupSetGUID		uniqueidentifier	null )
@@ -513,19 +553,19 @@ create	table	#File_FileListOnly
 	,PhysicalName		nvarchar ( 260 ) 
 	,Type			char ( 1 ) 
 	,FileGroupName		nvarchar ( 128 ) 
-	,Size			numeric ( 20,0 ) 
-	,MaxSize		numeric ( 20,0 ) 
+	,Size			numeric ( 20,	0 ) 
+	,MaxSize		numeric ( 20,	0 ) 
 	,FileID			bigint
-	,CreateLSN		numeric ( 25,0 ) 
-	,DropLSN		numeric ( 25,0 ) 	NULL
+	,CreateLSN		numeric ( 25,	0 ) 
+	,DropLSN		numeric ( 25,	0 ) 	NULL
 	,UniqueID		uniqueidentifier
-	,ReadOnlyLSN		numeric ( 25,0 ) 	NULL
-	,ReadWriteLSN		numeric ( 25,0 ) 	NULL
+	,ReadOnlyLSN		numeric ( 25,	0 ) 	NULL
+	,ReadWriteLSN		numeric ( 25,	0 ) 	NULL
 	,BackupSizeInBytes	bigint
 	,SourceBlockSize	int
 	,FileGroupID		int
 	,LogGroupGUID		uniqueidentifier	NULL
-	,DifferentialBaseLSN	numeric ( 25,0 ) 	NULL
+	,DifferentialBaseLSN	numeric ( 25,	0 ) 	NULL
 	,DifferentialBaseGUID	uniqueidentifier
 	,IsReadOnly		bit
 	,IsPresent		bit )
@@ -534,10 +574,7 @@ create	table	#File_FileListOnly1
 (	Step			smallint
 	,LogicalName		nvarchar ( 128 )  )
 ----------
-set	@sBackupSign=		'_backup_'
-----------
-if		convert ( varchar ( 10 ) , serverproperty ( 'ProductVersion' ) )	like	'%.%'	-- проверяем версию сервера
-	and	10<	left ( convert ( varchar ( 10 ) , serverproperty ( 'ProductVersion' ) ) , charindex ( '.' , convert ( varchar ( 128 ) , serverproperty ( 'ProductVersion' ) ) ) - 1 )
+if	@iServerVersion=	10			-- проверяем версию сервера
 begin
 	alter	table	#File_LabelOnly		add
 		MirrorCount		int	-- в документации поле называется Mirror_Count
@@ -553,23 +590,31 @@ begin
 	set	@sPattern=		'%2[0-9][0-9][0-9][_][0-1][0-9][_][0-3][0-9][_][0-2][0-9][0-5][0-9][0-5][0-9][_][0-9][0-9][0-9][0-9][0-9][0-9][0-9].%'	-- маска имени backup файла из MaintenancePlan sql 2012
 end
 else
-begin
-	alter	table	#File_LabelOnly		add	-- что, если linked сервер версии, несовпадающей с основным?
-		Mirror_Count		int
+	if	@iServerVersion=	12
+	begin
+		alter	table	#File_LabelOnly		add
+			MirrorCount		int	-- в документации поле называется Mirror_Count
+			,IsCompressed		bit
 ----------
-	set	@sPattern=		'%2[0-9][0-9][0-9][0-1][0-9][0-3][0-9][0-2][0-9][0-5][0-9].%'								-- маска имени backup файла из MaintenancePlan sql 2005
-end
-
-
-
-
-
-
-
-
-
-
-
+		alter	table	#File_BackupHeader	add
+			CompressedBackupSize	bigint
+			,containment		tinyint
+			,KeyAlgorithm		nvarchar ( 32 )		-- в документации отсутствуют
+			,EncryptorThumbprint	varbinary ( 20 )
+			,EncryptorType		nvarchar ( 32 )
+----------
+		alter	table	#File_FileListOnly	add
+			TDEThumbprint		varbinary ( 32 )
+----------
+		set	@sPattern=		'%2[0-9][0-9][0-9][_][0-1][0-9][_][0-3][0-9][_][0-2][0-9][0-5][0-9][0-5][0-9][_][0-9][0-9][0-9][0-9][0-9][0-9][0-9].%'	-- маска имени backup файла из MaintenancePlan sql 2012
+	end
+	else
+	begin
+		alter	table	#File_LabelOnly		add	-- что, если linked сервер версии, несовпадающей с основным?
+			Mirror_Count		int
+----------
+		set	@sPattern=		'%2[0-9][0-9][0-9][0-1][0-9][0-3][0-9][0-2][0-9][0-5][0-9].%'								-- маска имени backup файла из MaintenancePlan sql 2005
+	end
 ----------
 /*if	exists	( select
 			1
@@ -590,7 +635,7 @@ update
 set
 	s.Server=	ss.Server
 	,s.Suit=	case	s.Suit
-				when	''	then	replace ( replace ( replace ( replace ( convert ( varchar ( 24 ) , getdate() , 121 ) , '-' , '' ) , ' ' , '' ) , ':' , '' ) , '.' , '' )
+				when	''	then	@sNow1
 				else			s.Suit
 			end
 from
@@ -603,7 +648,7 @@ where
 
 /*
 		select
-			@sDBListOut=	isnull ( @sDBListOut , '' )/*+	t.Server*/+	t.DB+	@sDBDelimeter
+			@sDBListOut=	isnull ( @sDBListOut,	'' )/*+	t.Server*/+	t.DB+	@sDBDelimeter
 		from
 			#Body	t
 			left	join	sysservers	ss	on
@@ -627,23 +672,23 @@ update
 	b
 set
 	b.FromDB=	case
-				when	b.Action	like	'backup%'	then	isnull ( d.name/*зачем это здесь?*/ , b.FromDB )
+				when	b.Action	like	'backup%'	then	isnull ( d.name/*зачем это здесь?*/,	b.FromDB )
 				else							b.FromDB
 			end
 	,b.ToDB=	case
 				when	b.Action	like	'backup%'	then	b.ToDB
-				else							isnull ( d.name , b.ToDB )
+				else							isnull ( d.name,	b.ToDB )
 			end
 	,b.ToFile=	case
-				when	b.Action	like	'backup%'	then	replace ( isnull ( b.Server , @@servername ) , '\' , '!' )	-- ***по имени файла нельзя понять, этот файл с linked server или с локального сервера с таким же именем
+				when	b.Action	like	'backup%'	then	replace ( isnull ( b.Server,	@@servername ),	'\',	'!' )	-- ***по имени файла нельзя понять, этот файл с linked server или с локального сервера с таким же именем
 										+	'_'
 										+	b.DB
 										+	'_'
 										+	@sBackupSign
 										+	'_'
-										+	isnull ( s.Suit , replace ( replace ( replace ( replace ( convert ( varchar ( 24 ) , getdate() , 121 ) , '-' , '' ) , ' ' , '' ) , ':' , '' ) , '.' , '' ) )
+										+	isnull ( s.Suit,	@sNow1 )
 										+	case
-												when	s.Suit	is	null	then	'_'+	replace ( str ( b.Id , 4 ) , ' ' , '0' )
+												when	s.Suit	is	null	then	'_'+	replace ( str ( b.Id,	4 ),	' ','0' )
 												else					''
 											end
 										+	'.'
@@ -655,7 +700,7 @@ set
 			end
 from
 	#Body	b
-	inner	join	sysdatabases	d	on		-- игнорируем все несуществующие базы, нужно ли автосоздавать их по бекапу?
+	inner	join	sysdatabases	d	on		-- ***игнорируем все несуществующие базы, нужно ли автосоздавать их по бекапу?
 		d.name=	b.DB
 	inner	join	#Suit		s	on
 		s.Id=		b.Parent
@@ -724,7 +769,7 @@ begin
 	select	@iSequenceMax=	max ( Id )	from	#Body
 ----------
 	insert
-		#Body	( Id,	Parent,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly,	Access )
+		#Body	( Id,	Parent,	Action,	FromServer,	FromDB,	FromFolder,	FromFile,	ToServer,	ToDB,	ToFolder,	ToFolderFinal,	ToFile,	IsCompressed,	IsCopyOnly,	Moment,	Access )
 	select
 		@iSequenceMax+	d.Sequence
 		,b.Parent
@@ -741,6 +786,7 @@ begin
 		,b.ToFile
 		,b.IsCompressed
 		,b.IsCopyOnly
+		,b.Moment
 		,b.Access
 	from
 		#Body		b
@@ -751,7 +797,7 @@ begin
 			#BackupDir )	d
 	where
 			(	b.ServerQuoted=	d.ServerQuoted
-			or	isnull ( b.ServerQuoted , d.ServerQuoted )	is	null )
+			or	isnull ( b.ServerQuoted,	d.ServerQuoted )	is	null )
 		and	b.Folder=	d.Folder
 		and	d.FileName	like	'%'+	b.FromDB+	'%'	-- файлы, относящиеся к backup базы(ToDB может иметь другое имя) исходя из ЧАСТИЧНОГО совпадения имени файла, проблема будет, если одно имя полностью содержит другое, например, DB и DB1
 		and	b.FileName	is		null
@@ -770,7 +816,7 @@ begin
 			#BackupDir )	d
 	where
 			(	b.ServerQuoted=	d.ServerQuoted
-			or	isnull ( b.ServerQuoted , d.ServerQuoted )	is	null )
+			or	isnull ( b.ServerQuoted,	d.ServerQuoted )	is	null )
 		and	b.Folder=	d.Folder
 		and	d.FileName	like	'%'+	b.FromDB+	'%'	-- файлы, относящиеся к backup базы(ToDB может иметь другое имя) исходя из ЧАСТИЧНОГО совпадения имени файла, проблема будет, если одно имя полностью содержит другое, например, DB и DB1
 		and	b.FileName	is	null
@@ -779,6 +825,53 @@ end
 ----------
 deallocate	@cTemp	-- закрывать после повторного обращения к @@CURSOR_ROWS
 ----------
+
+
+
+
+
+if	@bDebug=	1
+begin
+	select * from #BackupDir
+	select * from #Body
+end
+
+
+
+
+
+-- ***этот запрос нужно выполнить на той стороне?
+select	@sHKLM=		'HKEY_LOCAL_MACHINE'
+----------
+exec	xp_instance_regread
+		@rootkey=	@sHKLM
+		,@key=		'SOFTWARE\Microsoft\\Microsoft SQL Server\\Instance Names\SQL'	--Определяем ключ инстанса, двойной обратный слеш для пробелов в имени ключа
+		,@value_name=	@@SERVICENAME
+		,@value=	@sInstanceKey	out
+----------
+select	@sInstanceKey=	'SOFTWARE\Microsoft\\Microsoft SQL Server\\'+	@sInstanceKey
+	,@sKey=			@sInstanceKey+	'\MSSQLSERVER'
+	,@sSQLDirDefault=	null
+----------
+exec	xp_instance_regread
+		@sHKLM
+		,@sKey
+		,N'DefaultData'
+		,@sSQLDirDefault	output
+----------
+if	@sSQLDirDefault	is	null	--при отсутствии параметра DefaultData умолчальная директория баз совпадает с системной из подключа @sInstanceKey\Setup[SQLDataRoot] с добавлением \Data
+begin
+	set	@sKey=	@sInstanceKey+	'\Setup'
+----------
+	exec	xp_instance_regread
+			@rootkey=	@sHKLM
+			,@key=		@sKey
+			,@value_name=	'SQLDataRoot'
+			,@value=	@sSQLDirDefault	out
+----------
+	set	@sSQLDirDefault=	@sSQLDirDefault+	'\Data'
+end
+----------
 set	@cTemp=	cursor	local	fast_forward	for
 			select
 				Id
@@ -786,10 +879,11 @@ set	@cTemp=	cursor	local	fast_forward	for
 				,Folder
 				,FileName
 				,DB
+				,Moment
 			from
 				#Body
 			where
-				Action=		'restore'
+				Action=	'restore'
 			order	by
 				ServerQuoted
 				,FromFolder
@@ -800,12 +894,11 @@ open	@cTemp
 ----------
 while	1=	1
 begin
-	fetch	next	from	@cTemp	into	@iStep,	@sServerQuoted,	@sFromFolder,	@sFromFile,	@sDB
+	fetch	next	from	@cTemp	into	@iStep,	@sServerQuoted,	@sFromFolder,	@sFromFile,	@sDB,	@dtMoment
 	if	@@fetch_status<>	0	break
 ----------
-	set	@sBackupDirFileQuoted=	''''+	@sFromFolder+	@sFromFile+	''''
-----------
-	set	@sScriptTemp=	'restore	labelonly	from	disk=	'+	@sBackupDirFileQuoted
+	select	@sBackupDirFileQuoted=	''''+	@sFromFolder+	@sFromFile+	''''
+		,@sScriptTemp=		'restore	labelonly	from	disk=	'+	@sBackupDirFileQuoted
 ----------
 	if	@bDebug=	1
 		print	( @sScriptTemp )
@@ -853,12 +946,14 @@ begin
 	from
 		#File_BackupHeader	bh
 	where
-		BackupType	in	( 1,	2 )
-	if	@@RowCount<>	1
+			BackupType	in	( 1,	2 )
+		and	(	BackupFinishDate<=	@dtMoment		-- ***более свежие бекапы пропускаем. если быть уверенным, что бекапы отсортированы по времени, то можно прекратить обработку этой БД
+			or	@dtMoment	is	null )
+	if	@@RowCount<>	1						-- ***больше одного бекапа в файле не поддерживается
 		update
 			#Body
 		set
-			Message=	isnull ( Message+	'; ',	'' )+	'ошибка LSN headeronly'
+			Message=	isnull ( Message+	'; ',	'' )+	'ошибка LSN headeronly 1'
 		where
 			id=	@iStep
 	else
@@ -883,12 +978,12 @@ begin
 		database_id
 	having
 		@dLSNFirst<=	min ( redo_start_lsn )	and	min ( redo_start_lsn )<	@dLSNLast	-- например, поданы файлы со старыми бекапами
-	if	@@Error<>	0	or	@iRowCount<>	1
+	if	@@Error<>	0	or	@iRowCount=	0
 	begin
 		update
 			#Body
 		set
-			Message=	isnull ( Message+	'; ',	'' )+	'ошибка LSN headeronly'
+			Message=	isnull ( Message+	'; ',	'' )+	'ошибка LSN headeronly 2'
 		where
 			id=	@iStep
 	end
@@ -907,7 +1002,7 @@ begin
 	select
 		@iBackupType=		bh.BackupType			-- 1=bak,2=trn
 		,@sDBLive=		sd1.name
-		--,@sDBStandby=		isnull ( sd2.name , sd1.name )
+		--,@sDBStandby=		isnull ( sd2.name,	sd1.name )
 		,@dFirstLSN=		bh.FirstLSN
 		,@databaseBackupLSN=	bh.databaseBackupLSN
 	from
@@ -917,7 +1012,7 @@ begin
 		left	join	server...sysdatabases	sd2	on
 			sd2.name=	@sDBLogShippedSign+	bh.databaseName
 	where
-			isnull ( sd2.name , sd1.name )=	@sDBStandby
+			isnull ( sd2.name,	sd1.name )=	@sDBStandby
 */
 
 --***проверить совпадение @iBackupType и расширения файла
@@ -938,6 +1033,37 @@ end
 deallocate	@cTemp
 ----------
 update
+	b
+set
+	b.Message=	isnull ( b.Message+	'; ',	'' )+	'пропускаем уже восстановленный бекап с меньшим LSN'
+from
+	sys.master_files	mf
+	,#Body			b
+where
+		db_name ( mf.database_id )=	case
+							when	b.Access	is	null	then	''
+							else						@sDBLogShippedSign
+						end+	b.DB
+	and	b.LSNLast<=	isnull ( mf.redo_start_lsn,	mf.differential_base_lsn )
+	and	b.Action=	'restore'
+----------
+update
+	b1
+set
+	b1.Message=	isnull ( b1.Message+	'; ',	'' )+	'пропускаем при наличии более позднего полного бекапа'
+from
+	#Body	b1
+	,#Body	b2
+where
+		b1.Action=	'restore'
+	and	b2.Action=	b1.Action
+	and	b2.Parent=	b1.Parent
+	and	b2.ToDB=	b1.ToDB
+	and	b2.Extension=	'bak'
+	and	b1.LSNLast<	b2.LSNLast
+	and	b1.Message	is	null
+----------
+update
 	bN
 set
 	bN.Message=	isnull ( bN.Message+	'; ',	'' )+	'шаг дублируется'	-- исключаем дублирующиеся шаги из обработки
@@ -946,31 +1072,33 @@ from
 	inner	join	#Body	bN	on
 		bN.Parent=	b.Parent
 	and	b.Id<		bN.Id
-	and	( bN.Action=	b.Action	or	isnull ( bN.Action,	b.Action )	is	null )
-	and	( bN.FromServer=b.FromServer	or	isnull ( bN.FromServer,	b.FromServer )	is	null )
-	and	( bN.FromDB=	b.FromDB	or	isnull ( bN.FromDB,	b.FromDB )	is	null )
-	and	( bN.FromFolder=b.FromFolder	or	isnull ( bN.FromFolder,	b.FromFolder )	is	null )
-	and	( bN.FromFile=	b.FromFile	or	isnull ( bN.FromFile,	b.FromFile )	is	null )
-	and	( bN.ToServer=	b.ToServer	or	isnull ( bN.ToServer,	b.ToServer )	is	null )
-	and	( bN.ToDB=	b.ToDB		or	isnull ( bN.ToDB,	b.ToDB )	is	null )
-	and	( bN.ToFolder=	b.ToFolder	or	isnull ( bN.ToFolder,	b.ToFolder )	is	null )
+	and	( bN.Action=		b.Action	or	isnull ( bN.Action,		b.Action )		is	null )
+	and	( bN.FromServer=	b.FromServer	or	isnull ( bN.FromServer,		b.FromServer )		is	null )
+	and	( bN.FromDB=		b.FromDB	or	isnull ( bN.FromDB,		b.FromDB )		is	null )
+	and	( bN.FromFolder=	b.FromFolder	or	isnull ( bN.FromFolder,		b.FromFolder )		is	null )
+	and	( bN.FromFile=		b.FromFile	or	isnull ( bN.FromFile,		b.FromFile )		is	null )
+	and	( bN.ToServer=		b.ToServer	or	isnull ( bN.ToServer,		b.ToServer )		is	null )
+	and	( bN.ToDB=		b.ToDB		or	isnull ( bN.ToDB,		b.ToDB )		is	null )
+	and	( bN.ToFolder=		b.ToFolder	or	isnull ( bN.ToFolder,		b.ToFolder )		is	null )
 	and	( bN.ToFolderFinal=	b.ToFolderFinal	or	isnull ( bN.ToFolderFinal,	b.ToFolderFinal )	is	null )
-	and	( bN.ToFile=	b.ToFile	or	isnull ( bN.ToFile,	b.ToFile )	is	null )
-	and	( bN.IsCopyOnly=b.IsCopyOnly	or	isnull ( bN.IsCopyOnly,	b.IsCopyOnly )	is	null )
+	and	( bN.ToFile=		b.ToFile	or	isnull ( bN.ToFile,		b.ToFile )		is	null )
+	and	( bN.IsCopyOnly=	b.IsCopyOnly	or	isnull ( bN.IsCopyOnly,		b.IsCopyOnly )		is	null )
+	and	( bN.Moment=		b.Moment	or	isnull ( bN.Moment,		b.Moment )		is	null )
 	left	join	#Body	bP	on
 		bP.Parent=	b.Parent
 	and	b.Id<		bP.Id	and	bP.Id<		bN.Id
-	and	(	( bP.Action<>	b.Action	and	isnull ( bP.Action,	b.Action )	is	not	null )
-		or	( bP.FromServer<>b.FromServer	and	isnull ( bP.FromServer,	b.FromServer )	is	not	null )
-		or	( bP.FromDB<>	b.FromDB	and	isnull ( bP.FromDB,	b.FromDB )	is	not	null )
-		or	( bP.FromFolder<>b.FromFolder	and	isnull ( bP.FromFolder,	b.FromFolder )	is	not	null )
-		or	( bP.FromFile<>	b.FromFile	and	isnull ( bP.FromFile,	b.FromFile )	is	not	null )
-		or	( bP.ToServer<>	b.ToServer	and	isnull ( bP.ToServer,	b.ToServer )	is	not	null )
-		or	( bP.ToDB<>	b.ToDB		and	isnull ( bP.ToDB,	b.ToDB )	is	not	null )
-		or	( bP.ToFolder<>	b.ToFolder	and	isnull ( bP.ToFolder,	b.ToFolder )	is	not	null )
+	and	(	( bP.Action<>		b.Action	and	isnull ( bP.Action,		b.Action )		is	not	null )
+		or	( bP.FromServer<>	b.FromServer	and	isnull ( bP.FromServer,		b.FromServer )		is	not	null )
+		or	( bP.FromDB<>		b.FromDB	and	isnull ( bP.FromDB,		b.FromDB )		is	not	null )
+		or	( bP.FromFolder<>	b.FromFolder	and	isnull ( bP.FromFolder,		b.FromFolder )		is	not	null )
+		or	( bP.FromFile<>		b.FromFile	and	isnull ( bP.FromFile,		b.FromFile )		is	not	null )
+		or	( bP.ToServer<>		b.ToServer	and	isnull ( bP.ToServer,		b.ToServer )		is	not	null )
+		or	( bP.ToDB<>		b.ToDB		and	isnull ( bP.ToDB,		b.ToDB )		is	not	null )
+		or	( bP.ToFolder<>		b.ToFolder	and	isnull ( bP.ToFolder,		b.ToFolder )		is	not	null )
 		or	( bP.ToFolderFinal<>	b.ToFolderFinal	and	isnull ( bP.ToFolderFinal,	b.ToFolderFinal )	is	not	null )
-		or	( bP.ToFile<>	b.ToFile	and	isnull ( bP.ToFile,	b.ToFile )	is	not	null )
-		or	( bP.IsCopyOnly<>b.IsCopyOnly	and	isnull ( bP.IsCopyOnly,	b.IsCopyOnly )	is	not	null ) )
+		or	( bP.ToFile<>		b.ToFile	and	isnull ( bP.ToFile,		b.ToFile )		is	not	null )
+		or	( bP.IsCopyOnly<>	b.IsCopyOnly	and	isnull ( bP.IsCopyOnly,		b.IsCopyOnly )		is	not	null )
+		or	( bP.Moment<>		b.Moment	and	isnull ( bP.Moment,		b.Moment )		is	not	null ) )
 where
 		bP.Id	is	null
 ----------
@@ -1011,6 +1139,7 @@ end
 
 
 
+
 ----------
 set	@cSuit=	cursor	local	fast_forward	for
 			select
@@ -1034,7 +1163,7 @@ begin
 ----------
 	if	@sServer<>	@@ServerName
 	begin
-		select	@sScriptTemp=	( select
+/*		select	@sScriptTemp=	( select
 						[data()]=	text								-- название колонки должно отсутствовать для работы функции text()
 					from
 						syscomments
@@ -1043,9 +1172,24 @@ begin
 						and	number<>	0
 						and	encrypted=	0
 					for
-						xml	path ( '' )
+						xml	path ( '' )								-- не годится, т.к. между строками добавляет пробел
 						,TYPE ).value ( '(./text())[1]',	'nvarchar(max)' )			-- чтобы не заменять xml спецсимволы
-			,@sProcName=	quotename ( isnull ( object_name ( @@procid ),	( select
+*/
+		set	@sScriptTemp=	''
+----------
+		select
+			@sScriptTemp=	@sScriptTemp+	text
+		from
+			syscomments
+		where
+				id=		@@procid
+			and	number<>	0
+			and	encrypted=	0
+		order	by
+			colid
+----------
+		select	@sProcName=	quotename ( isnull ( object_name ( @@procid )+	convert ( varchar ( 36 ),	newid() )
+										,	( select
 												name
 											from
 												sysobjects			-- учесть, что object_name ищет временные процедуры в текущей базе, а не tempdb, т.е. не работает
@@ -1055,7 +1199,7 @@ begin
 			,@sScript=	'create	proc	'+	/*schema_name ( objectproperty ( @@procid,	'OwnerId' ) )*/+	@sProcName+	'
 	'+	right ( @sScriptTemp,	len ( @sScriptTemp )-	patindex ( '%[^a-z0-9]@[a-z0-9]%as%',	@sScriptTemp ) )	-- считаем, что параметр у процедуры есть; заменяем имя процедуры, но схему не указываем, пусть процедура будет под пользователем linked сервера
 ----------
-		set	@x=	( select
+		set	@xPart=	( select
 					s.Suit
 					,s.IsAsyncronous
 					,s.Action
@@ -1070,6 +1214,7 @@ begin
 					,s.ToFile
 					,s.IsCompressed
 					,s.IsCopyOnly
+					,s.Moment
 
 					,b.Action
 					,b.FromServer
@@ -1083,6 +1228,7 @@ begin
 					,b.ToFile
 					,b.IsCompressed
 					,b.IsCopyOnly
+					,b.Moment
 					,b.Access
 				from
 					#suit	s
@@ -1090,7 +1236,7 @@ begin
 				where
 						s.Id=		@iParent
 					and	b.Parent=	s.Id
-					and	b.Message	is	null	-- если там только ошибки, а не предупреждения
+					and	b.Message	is	null	-- как отличить ошибку от предупреждения?
 				order	by
 					b.Id
 				for
@@ -1099,16 +1245,15 @@ begin
 	end
 	else
 	begin
-		select	@sPostfixUnique=	replace ( replace ( replace ( replace ( convert ( varchar ( 24 ) , getdate() , 121 ) , '-' , '' ) , ' ' , '' ) , ':' , '' ) , '.' , '' )
-			,@sProcName=		quotename (	case
-									when	@sServer	is	null	then	'##'	-- только на локальном сервере временный процедуры доживут от создания до выполнения
-									else						''
-								end
-							+	@sPostfixUnique
-							+	'_PlanBR_'
-							+	replace ( @@servername , '\' , '!' )
-							+	@sDBLogShippedSign )	-- ! для единообразия с именем файла
-			,@sScript=		'
+		select	@sProcName=	quotename (	case
+								when	@sServer	is	null	then	'##'	-- только на локальном сервере временный процедуры доживут от создания до выполнения
+								else						''
+							end
+						+	@sNow1
+						+	'_PlanBR_'
+						+	replace ( @@servername,	'\',	'!' )
+						+	@sDBLogShippedSign )	-- ! для единообразия с именем файла
+			,@sScript=	'
 create	proc	'+	@sProcName+	'
 	@sDBList	varchar ( 8000 )	output
 as
@@ -1118,6 +1263,9 @@ drop	proc	'+	@sProcName+	'	-- важно для постоянных процедур, лучше сделать в кон
 ----------
 declare	@iFSO		int
 	,@iError	int
+
+	,@sExec		varchar ( max )
+	,@iDB		integer
 ----------
 set	@sDBList=	null'
 ----------
@@ -1129,7 +1277,16 @@ set	@sDBList=	null'
 
 
 ----------
-		set	@cBodySteps=	cursor	local	forward_only	for			-- курсор переопределяем каждую итерацию, т.к. он использует переменную @iParent
+		set	@cBodySteps=	cursor	local	forward_only	for			-- курсор переопределяем каждую итерацию, недостаточно переоткрывать, т.к. он использует переменную @iParent
+						with	cteBody	as
+						(	select
+								*
+								,Sequence2=	row_number()	over	( partition	by	Parent	order	by	Id )
+							from
+								#Body
+							where
+									Parent=	@iParent
+								and	Message	is	null )	-- если там только ошибки, а не предупреждения
 						select
 							b.Id
 							,b.Action
@@ -1160,53 +1317,36 @@ set	@sDBList=	null'
 									+	b.DB
 							,AfterDBChange=		case
 											when		bP.Action<>	b.Action
-												or	bP.Server<>	b.Server
+												or	isnull ( bP.Server,	'' )<>	isnull ( b.Server,	'' )
 												or	bP.DB<>		b.DB
 												or	bP.Id	is	null	then	1
 											else						0
 										end
 							,BeforeDBChange=	case
 											when		bN.Action<>	b.Action
-												or	bN.Server<>	b.Server
+												or	isnull ( bN.Server,	'' )<>	isnull ( b.Server,	'' )
 												or	bN.DB<>		b.DB
 												or	bN.Id	is	null	then	1
 											else						0
 										end
 							,AfterServerChange=	case
 											when		bP.Action<>	b.Action
-												or	bP.Server<>	b.Server
+												or	isnull ( bP.Server,	'' )<>	isnull ( b.Server,	'' )
 												or	bP.Id	is	null	then	1
 											else						0
 										end
 							,BeforeServerChange=	case
 											when		bN.Action<>	b.Action
-												or	bN.Server<>	b.Server
+												or	isnull ( bN.Server,	'' )<>	isnull ( b.Server,	'' )
 												or	bN.Id	is	null	then	1
 											else						0
 										end
 						from
-							( select
-								*
-								,Sequence2=	row_number()	over	( partition	by	Parent	order	by	Id )
-							from
-								#Body )	b
-							left	join	( select
-										*
-										,Sequence2=	row_number()	over	( partition	by	Parent	order	by	Id )
-									from
-										#Body )	bP	on
-								bP.Parent=	b.Parent
-							and	bP.Sequence2=	b.Sequence2-	1
-							left	join	( select
-										*
-										,Sequence2=	row_number()	over	( partition	by	Parent	order	by	Id )
-									from
-										#Body )	bN	on
-								bN.Parent=	b.Parent
-							and	bN.Sequence2=	b.Sequence2+	1
-						where
-								b.Parent=	@iParent
-							and	b.Message	is	null	-- если там только ошибки, а не предупреждения
+							cteBody	b
+							left	join	cteBody	bP	on
+								bP.Sequence2=	b.Sequence2-	1
+							left	join	cteBody	bN	on
+								bN.Sequence2=	b.Sequence2+	1
 						order	by
 							b.Id
 ----------
@@ -1217,51 +1357,60 @@ set	@sDBList=	null'
 			fetch	next	from	@cBodySteps	into	@iStep,	@sAction,	@sFromServer,	@sFromDB,	@sFromFolder,	@sFromFile,	@sToServer,	@sToDB,	@sToFolder,	@sToFolderFinal,	@sToFile,	@bIsCompressed,	@bIsCopyOnly,	@sAccess,	@sServer,	@sServerQuoted,	@sDB,	@sDBQuoted,	@sExtension,	@dLSNFirst,	@dLSNLast,	@sDBLive,	@sDBStandBy,	@bAfterDBChange,	@bBeforeDBChange,	@bAfterServerChange,	@bBeforeServerChange
 			if	@@fetch_status<>	0	break
 ----------
-			if		@sAction=	'restore'
-				and	exists	( select	-- если backup не подходит для базы по порядку восстановления, то игнорируем его- неплохо бы в список ошибок складывать
+			set	@sScriptPart=	''
+----------
+			if	@sAction=	'restore'
+			begin
+				if	exists	( select
 							1
 						from
-							sys.master_files	-- sysaltfiles
+							sys.master_files
 						where
-								@dLSNFirst<=	isnull ( redo_start_lsn,	differential_base_lsn )	and	isnull ( redo_start_lsn,	differential_base_lsn )<	@dLSNLast
-							and	db_name ( database_id )=	@sDBStandby )
-			begin
-				select
-					@iDBCount=	count (	distinct	DB )
-				from
-					#Body
-				where
-					Parent=		@iParent
+								db_name ( database_id )=	@sDBStandby
+							and	@dLSNLast<	isnull ( redo_start_lsn,	differential_base_lsn ) )
+				begin
+					update
+						#Body
+					set
+						Message=	isnull ( Message,	'' )+	' LSN бекапа младше LSN базы или неверно задана база '+	@sDBStandby
+					where
+						Id=		@iStep
+				end
+				else
+				begin
+					/*select
+						@iDBCount=	count (	distinct	DB )
+					from
+						#Body
+					where
+						Parent=		@iParent*/
 ----------
-				set	@sScriptPart=	''
-----------
-				select
-					@sScriptPart=	@sScriptPart+	'
+					select
+						@sScriptPart=	@sScriptPart+	'
 ----------
 EXEC	sp_OACreate	''Scripting.FileSystemObject'',	@iFSO	OUT'
-				where
-					@bAfterServerChange=	1
+					where
+						@bAfterServerChange=	1
 ----------
 
-/*				if	@bIsCoupled=	1
-				begin
-					if	( select
-							count ( * )
-						from
-							#BackupDirParsed
-						where
-							Cutoff=	@sCutoff )	in	( @iDBCount/*bak*/,	@iDBCount*	2/*bak+trn*/ )
-						set	@bQuorum=	1
-					else
+/*					if	@bIsCoupled=	1
 					begin
-						if	@bQuorum=	0	set	@bStopWaiting=	1	else	set	@bQuorum=	0	-- если первый раз не хватает кол-ва бекапов для синхронного восстановления, то выходим и перечитываем, если во второй, то завершаем работу
+						if	( select
+								count ( * )
+							from
+								#BackupDirParsed
+							where
+								Cutoff=	@sCutoff )	in	( @iDBCount/*bak*/,	@iDBCount*	2/*bak+trn*/ )
+							set	@bQuorum=	1
+						else
+						begin
+							if	@bQuorum=	0	set	@bStopWaiting=	1	else	set	@bQuorum=	0	-- если первый раз не хватает кол-ва бекапов для синхронного восстановления, то выходим и перечитываем, если во второй, то завершаем работу
 ----------
-						break
-					end
-				end*/
+							break
+						end
+					end*/
 ----------
 
--- создать базу, если она не существует и поместить её в message?
 
 
 
@@ -1271,12 +1420,12 @@ EXEC	sp_OACreate	''Scripting.FileSystemObject'',	@iFSO	OUT'
 
 
 
---				if	@@RowCount=	1						-- правильно распознали название базы в имени файла, например, 'DB' и 'DB1', здесь 1- часть названия базы или разделитель в имени файла?
-				begin
-					select	@sLockName=	upper ( @sDBLive )+	@sProjectSign	-- сравнивается в бинарном виде, а одна и та же база может на разных серверах иметь имя в разном регистре
+--					if	@@RowCount=	1						-- правильно распознали название базы в имени файла, например, 'DB' и 'DB1', здесь 1- часть названия базы или разделитель в имени файла?
+					begin
+						set	@sLockName=	upper ( @sDBLive )+	@sProjectSign	-- сравнивается в бинарном виде, а одна и та же база может на разных серверах иметь имя в разном регистре
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 exec	@iError=	master..sp_getapplock					-- блокируем ресурс; если нужно запретить копирование в активированную базу, то блокировку нужно запросить с @LockMode=Exclusive, например, при выполнении длительного отчёта
 				@Resource=	'''+	@sLockName+	'''	-- делаем все блокировки относительно master упрощая работу, т.к. блокировки учитываются относительно текущей базы, поэтому и проверять их нужно относительно заданной базы, базу можно задать в самом execute
@@ -1285,107 +1434,155 @@ exec	@iError=	master..sp_getapplock					-- блокируем ресурс; если нужно запретит
 				,@LockTimeout=	0
 if	@@Error<>	0	or	@iError<>	0
 begin
-	set	@sDBList=	isnull ( @sDBList , '''' )+	'''+	@sDBLive+	@sDBDelimeter+	'''
+	set	@sDBList=	isnull ( @sDBList,	'''' )+	'''+	@sDBLive+	@sDBDelimeter+	'''
 	goto	skip_'+	upper ( @sDBLive )+	'
-end'
-					where
-						@bAfterDBChange=	1
+end'+	case
+		when	db_id ( @sDBStandby )	is	null	then	''
+		else	'
 ----------
-					set	@bRestoring=	1
+set	@iDB=	'+	convert ( varchar ( 10 ),	db_id ( @sDBStandby ) )+	'
+----------
+while	1=	1
+begin
+	set	@sExec=	''''
+----------
+	select
+		@sExec=	@sExec+	'';kill	''+	convert ( varchar ( 10 ),	req_spid )
+	from
+		( select	distinct
+			req_spid
+		from
+			syslockinfo
+		where
+			rsc_dbid=		@iDB
+		union
+		select
+			spid
+		from
+			sysprocesses
+		where
+				dbid=		@iDB
+			and	hostprocess=	'''' )	t
+----------
+	if	@sExec<>	''''
+		begin	try
+			exec	( @sExec )	-- может отключить непричастных, если логины часты
+		end	try
+		begin	catch
+		end	catch
+	else
+		break
+end'
+	end
+						where
+							@bAfterDBChange=	1
+----------
+						set	@bRestoring=	1
+
 /*
 
-***нужна проверка, что если есть более поздний .bak, то предыдущие .trn не восстанавливать, учитывая то, что некоторые могут находиться в suit
 
---@FirstLSNOld<=	@databaseBackupLSN
-					set	@bRestoring=	@bRestoring&	case
-											when	exists	( select
-														1
-													from
-														#BackupDirParsed	d1
-														,#BackupDirParsed	d2
-													where
-															d1.FileName=	@sBackupFile
-														and	d2.Extension=	@sExtBak		-- если есть последующие .bak файлы этой базы, то промежуточные .trn и .bak восстанавливать не нужно
-														and	left ( d2.FileName , patindex ( '%'+	d2.Cutoff+	'%',	d2.FileName )-	1 )=	@sDBLive+	@sBackupSign
-														and	d1.Cutoff<	d2.Cutoff	 )	then	0
-											else										1
-										end
+						set	@bRestoring=	@bRestoring&	case
+												when	exists	( select
+															1
+														from
+															#BackupDirParsed	d1
+															,#BackupDirParsed	d2
+														where
+																d1.FileName=	@sBackupFile
+															and	d2.Extension=	@sExtBak		-- если есть последующие .bak файлы этой базы, то промежуточные .trn и .bak восстанавливать не нужно
+															and	left ( d2.FileName,	patindex ( '%'+	d2.Cutoff+	'%',	d2.FileName )-	1 )=	@sDBLive+	@sBackupSign
+															and	d1.Cutoff<	d2.Cutoff	 )	then	0
+												else										1
+											end
 */
 ----------
-					--if	@bRestoring=	1
-					begin
-						select	@sBackupDirFileQuoted=	''''+	@sFromFolder+	@sFromFile+	''''
-							,@sScriptTemp=		'restore	filelistonly	from	disk=	'+	@sBackupDirFileQuoted+	'	with	nounload'
+						--if	@bRestoring=	1
+						begin
+							select	@sBackupDirFileQuoted=	''''+	@sFromFolder+	@sFromFile+	''''
+								,@sScriptTemp=		'restore	filelistonly	from	disk=	'+	@sBackupDirFileQuoted+	'	with	nounload'
 ----------
-						if	@bDebug=	1
-							print	( @sScriptTemp )
+							if	@bDebug=	1
+								print	( @sScriptTemp )
 ----------
-						truncate	table	#File_FileListOnly
+							truncate	table	#File_FileListOnly
 ----------
-						insert	#File_FileListOnly
-						exec	( @sScriptTemp )
-						if	@@error<>	0	continue	-- битый список файлов? нужно бы обрабатывать ошибки
+							insert	#File_FileListOnly
+							exec	( @sScriptTemp )
+							if	@@error<>	0	continue	-- битый список файлов? нужно бы обрабатывать ошибки
 ----------
-						select
-							@sSQLDir=	left ( filename,	len ( filename )-	charindex ( '\',	reverse ( filename ) ) )+	'\'
-						from
-							sysdatabases
-						where
-							name=	@sDB
+					-- ***этот запрос нужно выполнить на той стороне?
+							select
+								@sSQLDir=	left ( filename,	len ( filename )-	charindex ( '\',	reverse ( filename ) ) )+	'\'
+							from
+								sysdatabases
+							where
+								name=	@sDB
 ----------
-						set	@sScriptTemp=	'
+							if		@@RowCount<>	1
+								or	isnull ( @sSQLDir,	'' )=	''
+								set	@sSQLDir=	@sSQLDirDefault
+----------
+							set	@sScriptTemp=	'
 select
 	sdb.dbid
-	,saf.fileid
+	,fileid=	saf.file_id
 	,sdb.name
 	,LogicalName=	saf.name
-	,saf.filename
-	,TempName=	replace ( convert ( varchar ( 36 ) , newid() ) , ''-'' , '''' )	-- получаем гуид на той стороне
+	,filename=	saf.physical_name
+	,TempName=	replace ( convert ( varchar ( 36 ),	newid() ),	''-'',	'''' )	-- получаем гуид на той стороне
 from
-	sysdatabases	sdb
-	,sysaltfiles	saf
+	sysdatabases		sdb
+	,sys.master_files	saf
 where
 		sdb.name	like	''%'+	@sDB+	'%''
-	and	saf.dbid=	sdb.dbid'
+	and	saf.database_id=sdb.dbid'
 ----------
-						truncate	table	#Server_DBFiles
+							truncate	table	#Server_DBFiles
 ----------
-						insert	#Server_DBFiles	( dbid,	fileid,	DBName,	LogicalName,	filename,	TempName )
-						exec	( @sScriptTemp )
+							insert	#Server_DBFiles	( dbid,	fileid,	DBName,	LogicalName,	filename,	TempName )
+							exec	( @sScriptTemp )
 ----------
-						truncate	table	#Generation_Files
+							truncate	table	#Generation_Files
 ----------
-						insert
-							#Generation_Files	( DBStandby,	DBLive,	StandbyFileName,	LiveFileName,	TempFileName,	IsDBStandbyCreate )
-						select
-							case
-								when	@sAccess	is	not	null	then	isnull ( stby.DBName , @sDBLogShippedSign+	live.DBName )
-								else							live.DBName
-							end
-							,live.DBName
-							,case
-								when	@sAccess	is	not	null	then	isnull ( stby.filename , left ( live.filename , len ( live.filename )-	charindex ( '\' , reverse ( live.filename ) )+	1 )+	@sDBLogShippedSign+	right ( live.filename , charindex ( '\' , reverse ( live.filename ) )-	1 ) )
-								else							live.filename
-							end
-							,live.filename
-							,live.TempName
-							,case
-								when	@sAccess	is	not	null	and	stby.DBName	is	null	then	1
-								else												0
-							end
-						from
-							#File_FileListOnly	flo
-							left	join	#Server_DBFiles	live	on
-								live.LogicalName=	flo.LogicalName
-							and	live.DBName=		@sDB
-							left	join	#Server_DBFiles	stby	on
-								stby.LogicalName=	flo.LogicalName
-							and	(	@sAccess	is		null	and	stby.DBName=	@sDB
-								or	@sAccess	is	not	null	and	stby.DBName=	@sDBLogShippedSign+	@sDB )
+							insert
+								#Generation_Files	( DBStandby,	DBLive,	StandbyFileName,	LiveFileName,	TempFileName,	IsDBStandbyCreate )
+							select
+								case
+									when	@sAccess	is	not	null	then	isnull ( stby.DBName,	@sDBLogShippedSign+	live.DBName )
+									else							live.DBName
+								end
+								,live.DBName
+								,case
+									when	@sAccess	is	not	null	then	isnull ( stby.filename,	live.Path+	@sDBLogShippedSign+	right ( live.filename,	charindex ( '\',	reverse ( live.filename ) )-	1 ) )
+									else							live.filename
+								end
+								,live.filename
+								,live.TempName
+								,case
+									when	@sAccess	is	not	null	and	stby.DBName	is	null	then	1
+									else												0
+								end
+							from
+								#File_FileListOnly	flo
+								left	join	#Server_DBFiles	live	on
+									live.LogicalName=	flo.LogicalName
+								and	live.DBName=		@sDB
+								left	join	#Server_DBFiles	stby	on
+									stby.LogicalName=	flo.LogicalName
+								and	(	@sAccess	is		null	and	stby.DBName=	@sDB
+									or	@sAccess	is	not	null	and	stby.DBName=	@sDBLogShippedSign+	@sDB )
 ----------
-						if	@sExtension=	@sExtBak
-						begin
-							set	@sScriptPart=	@sScriptPart+	'
+							if	@sExtension=	@sExtBak
+							begin
+								/*if	@bDebug=	1
+								begin
+									select * from #Generation_Files
+									select * from #File_FileListOnly
+									select * from #Server_DBFiles
+								end*/
+----------
+								set	@sScriptPart=	@sScriptPart+	'
 ----------
 restore	database
 	'+	@sDBStandby+	'
@@ -1397,34 +1594,68 @@ with
 	,replace
 	,stats=	100'
 ----------
+								set	@sUnique=	replace ( convert ( varchar ( 36 ),	newid() ),	'-',	'' )
+----------
+								select
+									@sScriptPart=	@sScriptPart+	'
+	,move	'''
+										+	flo.LogicalName
+										+	'''	to	'''
+										+	coalesce ( @sToFolder,	saf.Path,	@sSQLDir )	-- считаем заданную директорию важнее, чем та, где уже лежат файлы
+										+	case	@sDBLive
+												when	@sDBStandby	then	''
+												else				@sDBLogShippedSign
+											end
+										+	isnull ( saf.File1,	right ( flo.PhysicalName,	charindex ( '\',	reverse ( flo.PhysicalName ) )-	1 ) )	-- считаем имена уже существующих файлов важнее, т.к. они могут быть переименованы согласно местным условиям
+										+	case
+												when	saf2.filename	is	null	then	''
+												else					@sUnique	-- уникализируем имя файла, например, если возстановлено несколько тестовых баз
+											end
+										+	''''					-- вырезать имя файла из полного пути
+								from
+									#File_FileListOnly	flo
+									left	join	#Server_DBFiles	saf	on
+										saf.LogicalName=	flo.LogicalName
+									and	saf.DBName=		@sDB
+									left	join	#Server_DBFiles	saf2	on
+										saf2.filename=		isnull ( saf.Path,	@sSQLDir )	-- база может восстанавливаться под другим названием
+												+	case	@sDBLive
+														when	@sDBStandby	then	''
+														else				@sDBLogShippedSign
+													end
+												+	right ( flo.PhysicalName,	charindex ( '\',	reverse ( flo.PhysicalName ) )-	1 )
 
 
-if	@bDebug=	1
-begin
-	select * from #Generation_Files
-	select * from #File_FileListOnly
-	select * from #Server_DBFiles
-end
 
 
 
-							select
-								@sScriptPart=	@sScriptPart+	'
-	,move	'''+	flo.LogicalName+	'''	to	'''+	isnull ( left ( saf.filename , len ( saf.filename )-	charindex ( '\' , reverse ( saf.filename ) )+	1 ) , @sSQLDir )	-- база может восстанавливаться под другим названием
-									+	case	@sDBLive
-											when	@sDBStandby	then	''
-											else				@sDBLogShippedSign
-										end
-									+	right ( flo.PhysicalName , charindex ( '\' , reverse ( flo.PhysicalName ) )-	1 )+	''''	-- вырезать имя файла из полного пути
-							from
-								#File_FileListOnly	flo
-								left	join	#Server_DBFiles	saf	on
-									saf.LogicalName=	flo.LogicalName
-								and	saf.DBName=		@sDB
-						end
-						else
-							if	@sExtension=	@sExtTrn
-								set	@sScriptPart=	@sScriptPart+	'
+								/*select
+									flo.LogicalName
+									,saf.filename
+									,@sSQLDir
+									,@sDBLive
+									,@sDBStandby
+									,@sDBLogShippedSign
+									,flo.PhysicalName
+								from
+									#File_FileListOnly	flo
+									left	join	#Server_DBFiles	saf	on
+										saf.LogicalName=	flo.LogicalName
+									and	saf.DBName=		@sDB*/
+
+--select * from #Server_DBFiles
+
+
+
+
+
+
+
+
+							end
+							else
+								if	@sExtension=	@sExtTrn
+									set	@sScriptPart=	@sScriptPart+	'
 ----------
 restore	log
 	'+	@sDBStandby+	'
@@ -1433,121 +1664,121 @@ from
 with
 	file=		1
 	,standby=	'''+	@sFromFolder+	@sDBStandby+	'.TUF'''
-					end
+						end
 ----------
-					set	@sScriptPart=	@sScriptPart+	'
+						set	@sScriptPart=	@sScriptPart+	'
 ----------
-'+	case	@bRestoring		-- даже невосстанавливаемые бекапы нужно стирать, т.к. при запуске с теми же параметрами файлы снова начнут обрабатываться; о сохранности файлов для архива заботится внешний процесс, например, через хардлинк
+'/*+	case	@bRestoring		-- бекапы не стираем, чтобы можно было восстановить тестовые базы с другим именем; о стирании файлов заботится внешний процесс, чтобы эта процедура не тратила время на уже неактуальные файлы бекапов
 		when	1	then	'if	@@Error=	0
 	'
 		else			''
-	end+	'exec	sp_OAMethod	@iFSO,	''DeleteFile'',	null,	'+	@sBackupDirFileQuoted+	',	1'	-- ***не стирать, если из этого файла нужно восстанавливать ещё базы с другим именем на этом же сервере
+	end+	'exec	sp_OAMethod	@iFSO,	''DeleteFile'',	null,	'+	@sBackupDirFileQuoted+	',	1'*/
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 alter	database	'+	@sDBStandby+	'	set	offline'
-					where
-						@sAccess	is	not	null
+						where
+							@sAccess	is	not	null
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 exec	sp_OAMethod
 		@iFSO
 		,''CopyFile''
 		,'''+	isnull ( @sSQLDir+	StandbyFile,	StandbyFileName )+	'''
 		,'''+	isnull ( @sSQLDir,	StandByPath )+	TempFileName+	''''	--вырезать имя файла из полного пути и копируем файлы для live базы, но с другим именем, чтобы live базу не останавливать
-					from
-						#Generation_Files
-					where
-						@sAccess	is	not	null
+						from
+							#Generation_Files
+						where
+							@sAccess	is	not	null
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 alter	database	'+	@sDBStandby+	'	set	online
 ----------
 alter	database	'+	@sDBLive+	'	set	offline'
-					where
-						@sAccess	is	not	null
+						where
+							@sAccess	is	not	null
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 exec	sp_OAMethod	@iFSO,	''DeleteFile'',	'''+	@sSQLDir+	LiveFile+	''''	--переименовываем скопированные под другим именем файлы в файлы Live базы
-					from
-						#Generation_Files
-					where
-						@sAccess	is	not	null
+						from
+							#Generation_Files
+						where
+							@sAccess	is	not	null
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 exec	sp_OAMethod	@iFSO,	''MoveFile'',	'''+	@sSQLDir+	TempFileName+	''',	'''+	@sSQLDir+	LiveFile+	''''	--переименовываем скопированные под другим именем файлы в файлы Live базы
-					from
-						#Generation_Files
-					where
-						@sAccess	is	not	null
+						from
+							#Generation_Files
+						where
+							@sAccess	is	not	null
 ----------
-					select
-						@sScriptPart=	@sScriptPart+	'
+						select
+							@sScriptPart=	@sScriptPart+	'
 ----------
 alter	database	'+	@sDBLive+		'	set	online
 ----------
 exec	'+	@sDBLive+	'..sp_changedbowner	'''+	'dbo'/*@sOwner*/+	''''	-- базе в standby нельзя сделать sp_changedbowner
-					where
-						@sAccess	is	not	null
-				end
+						where
+							@sAccess	is	not	null
+					end
 ----------
-				select
-					@sScriptPart=	@sScriptPart+	'
+					select
+						@sScriptPart=	@sScriptPart+	'
 
 skip_'+	upper ( @sDBLive )+	':
 
 exec	@iError=	master..sp_releaseapplock		-- отпускаем блокировку
 				@Resource=	'''+	@sLockName+	'''
 				,@LockOwner=	''Session'''
-				where
-					@bBeforeDBChange=	1
+					where
+						@bBeforeDBChange=	1
 ----------
-				select
-					@sScriptPart=	@sScriptPart+	'
+					select
+						@sScriptPart=	@sScriptPart+	'
 ----------
 exec	sp_OADestroy	@iFSO'
-				where
-					@bBeforeServerChange=	1
+					where
+						@bBeforeServerChange=	1
+				end
 			end
 ----------------------------------------------------------------------------------------------------
 			else
 				if		@sAction	like	'backup database'
 					or	@sAction	like	'backup log'
 				begin
-					select	@dtMoment=		getdate()
-						,@sCutoff=		str ( year ( @dtMoment ) , 4 )
+					select	@sCutoff=		str ( year ( @dtNow ),	4 )
 								+	'_'
-								+	replace ( str ( month ( @dtMoment ) , 2 ) , ' ' , '0' )
+								+	replace ( str ( month ( @dtNow ),	2 ),	' ',	'0' )
 								+	'_'
-								+	replace ( str ( day ( @dtMoment ) , 2 ) , ' ' , '0' )
+								+	replace ( str ( day ( @dtNow ),		2 ),	' ',	'0' )
 								+	'_'
-								+	replace ( replace ( right ( convert ( varchar ( 23 ) , @dtMoment , 121 ) , 12 ) , ':' , '' ) , '.' , '_' )
+								+	replace ( replace ( right ( @sNow,	12 ),	':',	'' ),	'.',	'_' )
 								--+	'0000'
 						,@sBackupInfo=		@sCutoff
 								+	'|'
-								+	convert ( varchar ( 128 ) , convert ( varchar ( 16 ) , SERVERPROPERTY ( 'ProductVersion' ) )
+								+	convert ( varchar ( 128 ),	convert ( varchar ( 16 ),	@sServerVersion )
 								+	'|'
-								+	convert ( varchar ( 8 ) , SERVERPROPERTY ( 'EngineEdition' ) )
+								+	convert ( varchar ( 8 ),	SERVERPROPERTY ( 'EngineEdition' ) )
 								+	'|'
-								+	@@servername+	isnull ( '.'+	db_name()+	'.'+	schema_name ( OBJECTPROPERTY ( @@procid,'OwnerId' ) )+	'.'+	object_name ( @@procid ) , '' )
+								+	@@servername+	isnull ( '.'+	db_name()+	'.'+	schema_name ( OBJECTPROPERTY ( @@procid,	'OwnerId' ) )+	'.'+	object_name ( @@procid ),	'' )
 								+	'|'
-								+	convert ( varchar ( 2 ) , @@NESTLEVEL )
-								+	isnull ( '|'+	app_name() , '' ) )
-						,@sBackupInfoStr=	replace ( @sBackupInfo , '''' , '''''' )	-- чтобы при склеивании команды символ сохранился
+								+	convert ( varchar ( 2 ),	@@NESTLEVEL )
+								+	isnull ( '|'+	app_name(),	'' ) )
+						,@sBackupInfoStr=	replace ( @sBackupInfo,	'''',	'''''' )	-- чтобы при склеивании команды символ сохранился
 ----------
 					set	@sScriptPart=		'
 ----------
 select							-- считаем, что нельзя одновременно бекапить несколько раз, хотя сервер и сам останавливается и ждёт завершения бекапа в другом соединении
-	@sDBList=	isnull ( @sDBList , '''' )+	DB_NAME ( database_id )+	'''+	@sDBDelimeter+	'''
+	@sDBList=	isnull ( @sDBList,	'''' )+	DB_NAME ( database_id )+	'''+	@sDBDelimeter+	'''
 from
 	master.sys.dm_exec_requests			-- sql 2005+
 where
@@ -1584,7 +1815,7 @@ begin
 									end
 							+	'
 	if	@@Error<>	0
-		set	@sDBList=	isnull ( @sDBList , '''' )+	'''+	@sDB+	@sDBDelimeter+	'''
+		set	@sDBList=	isnull ( @sDBList,	'''' )+	'''+	@sDB+	@sDBDelimeter+	'''
 end'
 				end
 ----------
@@ -1597,32 +1828,46 @@ end'
 ----------
 	if	@bDebug=	1
 	begin
-		print	substring(@sScript,1,8000)
-		print	substring(@sScript,8001,16000)
-		print	substring(@sScript,16001,24000)
-		print	substring(@sScript,24001,32000)
-		print	substring(@sScript,32001,40000)
-		print	substring(@sScript,40001,48000)
-		print	substring(@sScript,48001,56000)
-		print	substring(@sScript,56001,64000)
-		print	substring(@sScript,64001,72000)
-		print	substring(@sScript,72001,80000)
+		print	substring(@sScript,1,4000)
+		print	substring(@sScript,4001,8000)
+		print	substring(@sScript,8001,12000)
+		print	substring(@sScript,12001,16000)
+		print	substring(@sScript,16001,20000)
+		print	substring(@sScript,20001,24000)
+		print	substring(@sScript,24001,28000)
+		print	substring(@sScript,28001,32000)
+		print	substring(@sScript,32001,36000)
+		print	substring(@sScript,36001,40000)
+		print	substring(@sScript,40001,44000)
+		print	substring(@sScript,44001,48000)
+		print	substring(@sScript,48001,52000)
+		print	substring(@sScript,52001,56000)
+		print	substring(@sScript,56001,60000)
+		print	substring(@sScript,60001,64000)
+		print	substring(@sScript,64001,68000)
+		print	substring(@sScript,68001,72000)
 	end
 ----------
 	if	@sServer<>	@@ServerName
 	begin
-		select	@sScript=	'
-exec ( '+	replace ( @sScript,	'''',	'''''' )+	')
+		if	@xPart	is	not	null
+		begin
+			select	@sXML=		convert ( varchar ( max ),	@xPart )
+				,@sScript=	'
+exec ( '''+	replace ( @sScript,	'''',	'''''' )+	'
+'')
 exec	'+	@sProcName+	'
 		@tPlan=		@x
 		,@tMessage=	@s	output'
-			,@sExecAtServer=	@sServerQuoted+	'.tempdb..sp_executesql'	-- чтобы процедура без ## на другом сервере создавалась в tempdb, а не в базе по умолчанию для логина линкед сервера
+				,@sExecAtServer=	@sServerQuoted+	'.tempdb..sp_executesql'	-- чтобы процедура без ## на другом сервере создавалась в tempdb, а не в базе по умолчанию для логина линкед сервера
 ----------
-		exec	@sExecAtServer
-				@statement=	@sScript
-				,@params=	N'@x	xml,	@s	varchar ( 8000 )	out'
-				,@x=		@x
-				,@s=		@sDBList	out
+			exec	@sExecAtServer
+					@statement=	@sScript
+					,@params=	N'@x	text
+							,@s	varchar ( 8000 )	out'
+					,@x=		@sXML
+					,@s=		@sDBList	out
+		end
 	end
 	else
 		exec	( @sScript )				-- сначала создать все процедуры, потом выполнять их, возможно асинхронно
@@ -1634,7 +1879,7 @@ exec	'+	@sProcName+	'
 	where
 		Id=		@iParent
 ----------
-	set	@sDBListOut=	@sDBListOut+	isnull ( @sDBListOut2+	@sDBDelimeter , '' )
+	set	@sDBListOut=	@sDBListOut+	isnull ( @sDBListOut2+	@sDBDelimeter,	'' )
 end
 ----------
 close	@cSuit
@@ -1666,11 +1911,11 @@ begin
 -- ***нужен параметр- не запускать параллельный процесс, если уже запущено и не завершилось по числу рарешённых ядер в affinity
 
 		select	@sLogin=	null
-			,@sPwd=		null
-			,@sConnection=	'Provider=SQLOLEDB;'	-- если этот провайдер отсутствует?
-				+	'Server='+		isnull ( @sServer,	@@servername )+	';'
-				+	'Database=tempdb;'
-				+	'Trusted_Connection='+	case
+			,@sPwd=		null			-- не поддерживается
+			,@sConnection=	'Provider=SQLOLEDB'	-- этот провайдер всегда присутствует?
+				+	';Server='+		isnull ( @sServer,	@@servername )
+				+	';Database=master'
+				+	';Trusted_Connection='+	case
 									when	@sLogin	is	null	then	'yes'
 									else					'no'
 								end
@@ -1727,7 +1972,7 @@ goto	done
 error:
 
 if	@sMessage	is	null	set	@sMessage=	'Ошибка ручного log shipping'
-raiserror ( @sMessage , 18 , 1 )
+raiserror ( @sMessage,	18,	1 )
 --EXEC	@iError=	sp_OAGetErrorInfo	null,	@source	OUT,	@desc	OUT
 --SELECT	OLEObject=	CONVERT ( binary ( 4 ),	@iError ),	source=	@source,	description=	@desc
 
@@ -1736,7 +1981,7 @@ done:
 set	@sDBList=	@sDBListOut
 
 ----------
---if	cursor_status ( 'variable' , '@cTemp' )<>	-2	deallocate	@cTemp
+--if	cursor_status ( 'variable',	'@cTemp' )<>	-2	deallocate	@cTemp
 
 --drop	table
 --	#BackupDir
